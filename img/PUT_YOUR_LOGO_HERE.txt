@@ -1,0 +1,13 @@
+Drop your logo image in this folder, named exactly one of:
+
+  logo.jpeg
+  logo.jpg
+  logo.png
+
+Lowercase filename only — GitHub Pages is case-sensitive.
+
+The app automatically tries all three, in that order, and falls back
+to the built-in drawn Celtic crest if none of them exist. You don't
+need to edit any code, just add the file and push.
+
+You can delete this text file once you've added your logo.
