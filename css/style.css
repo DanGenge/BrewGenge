@@ -80,17 +80,29 @@ tbody tr:hover{background:#fdf8f0;}
 tr.total td{font-weight:800;border-top:2px solid var(--ink);background:var(--amber-soft);}
 tr.owned{background:var(--green-soft);}
 .name{font-weight:800;}
-.sub{font-size:11px;color:var(--muted);white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis;}
+.sub{font-size:11px;color:var(--muted);white-space:nowrap;max-width:340px;overflow:hidden;text-overflow:ellipsis;}
 .pill{background:#eeeae5;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700;white-space:nowrap;}
 .strike{text-decoration:line-through;color:var(--muted);margin-right:6px;font-size:.85em;}
+
+/* ---- Recipe Library table: dedicated layout, this fixes the
+   clipped Export/Delete icon bug. The wrapper scrolls horizontally
+   (overflow-x:auto) rather than clipping content (overflow:hidden),
+   and the actions column has a guaranteed minimum width so all
+   five icons always fit and are always reachable. ---- */
+.lib-wrap{ overflow-x:auto; padding:0; }
+table.lib-table{ width:100%; min-width:920px; border-collapse:collapse; }
+table.lib-table .col-star{ width:34px; }
+table.lib-table .col-thumb{ width:56px; }
+table.lib-table .col-actions{ width:190px; white-space:nowrap; }
+table.lib-table td, table.lib-table th{ padding:9px 8px; }
 
 .star{border:0;background:none;font-size:20px;color:#c9c1b8;cursor:pointer;padding:2px;line-height:1;}
 .star:hover{color:var(--gold);transform:scale(1.12);}
 .star.on{color:var(--gold);}
 .row-lib{cursor:pointer;}
 .row-lib.sel{background:var(--amber-soft);box-shadow:inset 3px 0 0 var(--gold);}
-.actions{display:flex;gap:5px;justify-content:flex-end;}
-.iconbtn{width:30px;height:30px;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;font-size:.85rem;}
+.actions{display:flex;gap:4px;justify-content:flex-end;flex-wrap:nowrap;}
+.iconbtn{width:28px;height:28px;flex-shrink:0;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;font-size:.8rem;}
 .iconbtn:hover{background:#f2efe9;}
 .iconbtn.danger:hover{background:var(--red-soft);border-color:var(--red);}
 .toggle{display:flex;align-items:center;gap:8px;font-size:.82rem;font-weight:700;color:var(--muted);cursor:pointer;}

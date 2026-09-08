@@ -19,3 +19,7 @@ Run `supabase/001_user_app_state.sql` once in the SQL Editor. Covers every accou
 ## Sharing recipes
 
 Recipe Library → **Export Recipe Pack** (all / favourites / mine) or the ⬇ icon on a single row. Images are embedded as Base64 inside the JSON. **Import JSON** understands both BrewGenge's own format and common "verbose" recipe JSON (e.g. `fermentables`/`hops` as named objects with `amountKg`/`amountG`/`alphaAcidPercent`), which is what most AI-generated recipe searches produce. If a file has no readable ingredients, you get a clear error instead of a blank recipe.
+
+## Changelog
+
+- Fixed: Recipe Library actions column (Export ⬇ and Delete 🗑) was being clipped off-screen by an `overflow:hidden` container. The library table now has its own scrollable wrapper and a guaranteed-width actions column so all five icons (Brew, Rename/Image, Duplicate, Export, Delete) are always visible and clickable.

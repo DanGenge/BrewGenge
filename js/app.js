@@ -290,8 +290,8 @@ function library(){
       </div>
       <div id="hiddenBar" class="muted" style="margin-top:8px;"></div>
     </div>
-    <div class="card list" style="padding:0;overflow:hidden;">
-      <table><thead><tr><th style="width:34px;"></th><th style="width:44px;"></th><th>Recipe</th><th>Style</th><th>ABV</th><th>IBU</th><th>Batch</th><th>Source</th><th>Updated</th><th style="width:150px;"></th></tr></thead><tbody id="rows"></tbody></table>
+    <div class="card lib-wrap">
+      <table class="lib-table"><thead><tr><th class="col-star"></th><th class="col-thumb"></th><th>Recipe</th><th>Style</th><th>ABV</th><th>IBU</th><th>Batch</th><th>Source</th><th>Updated</th><th class="col-actions">Actions</th></tr></thead><tbody id="rows"></tbody></table>
     </div>`;
   const rows = ()=>{
     const q = ($("#q").value||"").toLowerCase();
@@ -304,14 +304,14 @@ function library(){
     $("#count").textContent = `${list.length} recipe${list.length===1?'':'s'}`;
     $("#rows").innerHTML = list.map(({r,custom})=>`
       <tr class="row-lib ${r.id===STATE.selectedId?'sel':''}" data-sel="${r.id}">
-        <td><button class="star ${isFav(r.id)?'on':''}" data-fav="${r.id}">${isFav(r.id)?'★':'☆'}</button></td>
-        <td><div class="thumb">${recipeThumb(r)}</div></td>
+        <td class="col-star"><button class="star ${isFav(r.id)?'on':''}" data-fav="${r.id}">${isFav(r.id)?'★':'☆'}</button></td>
+        <td class="col-thumb"><div class="thumb">${recipeThumb(r)}</div></td>
         <td><div class="name">${esc(r.name)}</div><div class="sub">${esc((r.desc||"").split(".")[0])}</div></td>
-        <td><span class="pill">${esc(r.style)}</span></td>
+        <td><span class="pill">${esc(r.style)||'-'}</span></td>
         <td>${fmt(r.abv,1)}%</td><td>${fmt(r.ibu,0)}</td><td>${fmt(r.baseBatch,0)} L</td>
         <td class="muted">${custom?'BrewGenge':'Library'}</td>
         <td class="muted">${custom?fmtDate(r.updatedAt):'-'}</td>
-        <td><div class="actions">
+        <td class="col-actions"><div class="actions">
           <button class="iconbtn" data-brew="${r.id}" title="Brew this">🍺</button>
           <button class="iconbtn" data-edit="${r.id}" title="Rename / image">🖼</button>
           <button class="iconbtn" data-dupe="${r.id}" title="Duplicate">⧉</button>
@@ -730,17 +730,6 @@ function resizeImg(file, cb){
 
 /* ============================================================
    Recipe import normalisation
-   ------------------------------------------------------------
-   Understands three shapes:
-   1. A BrewGenge pack {recipes:[...]} (any "format" label/case)
-   2. A single BrewGenge-shaped recipe {ferm:[[...]], hops:[[...]]}
-   3. A "verbose" recipe object using named fields, e.g.
-      {fermentables:[{name,amountKg}], hops:[{name,amountG,
-      alphaAcidPercent,use,timeMin}], targets:{og,fg,abvPercent,ibu},
-      batchSizeL, yeast:[{name,form,pitchTempC}], ...}
-      This is the shape produced by many AI recipe searches.
-   Anything that matches neither shape returns null so the caller
-   can show a clear error instead of silently saving a blank recipe.
    ============================================================ */
 function extractRecipeList(o){
   if(Array.isArray(o)) return o;
@@ -947,13 +936,7 @@ function updateSyncBadge(){
 }
 
 /* ============================================================
-   Logo / crest loading
-   ------------------------------------------------------------
-   Tries img/logo.jpeg, then img/logo.jpg, then img/logo.png,
-   then falls back to the built-in drawn Celtic crest. This means
-   whichever of the three common extensions you upload just works,
-   with no code edits required. Filenames are case-sensitive on
-   GitHub Pages, so they must be lowercase exactly as shown.
+   Logo / crest loading (tries jpeg -> jpg -> png -> drawn SVG fallback)
    ============================================================ */
 function setupCrest(){
   const el = document.getElementById("crest");
