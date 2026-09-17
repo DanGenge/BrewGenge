@@ -3,7 +3,6 @@
    Recipes are stored at their BASE BATCH size (litres into fermenter).
    ============================================================ */
 
-/* ---- Fallback Celtic crest (drawn SVG, always renders even with no image file) ---- */
 const BREWGENGE_LOGO_SVG = `
 <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
   <defs><linearGradient id="bgGold" x1="0" y1="0" x2="1" y2="1">
@@ -26,7 +25,6 @@ const BREWGENGE_LOGO_SVG = `
   <path d="M52 58 L68 58 M50 66 L70 66 M53 74 L67 74" stroke="#ffe6b0" stroke-width="1.3" opacity="0.65"/>
 </svg>`.trim();
 
-/* ---- Themed NSW/Tasmania recipe artwork (inline SVG scenes) ---- */
 const RECIPE_SVG_ICONS = {
   r1: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="#7a3a12"/><circle cx="50" cy="33" r="14" fill="#ffcf5c"/><path d="M6 63 Q50 20 94 63" fill="none" stroke="#141312" stroke-width="4"/><path d="M6 63 H94" stroke="#141312" stroke-width="3"/><path d="M22 63V47M36 63V39M50 63V33M64 63V39M78 63V47" stroke="#141312" stroke-width="2.4"/><rect y="63" width="100" height="37" fill="#43200a"/><path d="M40 90l5-15 5 15 5-15 5 15Z" fill="#f3b44d"/></svg>`,
   r2: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="#0778b5"/><circle cx="70" cy="30" r="11" fill="#ffe08b"/><path d="M0 66 Q26 48 52 66 T100 62 V100 H0Z" fill="#0aa0dc"/><path d="M0 80 Q26 66 52 80 T100 76 V100 H0Z" fill="#4cc4ef"/><ellipse cx="38" cy="56" rx="6" ry="16" fill="#f3b44d" transform="rotate(-22 38 56)"/></svg>`,
@@ -44,41 +42,40 @@ const CUSTOM_RECIPE_SVG_ICON = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.
 const FERMENTABLE_PRICE = { default: 4.85 };
 const HOP_PRICE = { default: 0.13 };
 
-/* ---- The 10 built-in recipes ---- */
 const RECIPES = [
   { id:"r1", name:"HenHouse Incredible IPA Clone", style:"West Coast IPA", baseBatch:40,
     og:1.063, fg:1.010, abv:6.9, ibu:58, yeast:"US-05 / WLP001", yeastForm:"Dry", atten:0.80,
-    tempLo:18, tempHi:20, desc:"Orange peel, pine and dank hop character with a clean, crisp bitterness.",
+    tempLo:18, tempHi:20, mashTemp:66, desc:"Orange peel, pine and dank hop character with a clean, crisp bitterness.",
     ferm:[["American Ale Malt",9.8,4.85],["Vienna Malt",0.6,5.45],["Light Munich I",0.35,5.45],["Carapils / Dextrine",0.25,6.65]],
     hops:[["Simcoe",25,13,"Boil",60],["Cascade",20,7.5,"Boil",15],["Mosaic",20,12,"Boil",15],["Mosaic",50,12,"Whirlpool",20],["Simcoe",50,13,"Whirlpool",20],["Hallertau Blanc",40,10,"Whirlpool",20],["Belma",40,10,"Whirlpool",20],["Cascade",20,7.5,"Whirlpool",20],["Mosaic",40,12,"Dry Hop",0],["Simcoe",40,13,"Dry Hop",0],["Hallertau Blanc",40,10,"Dry Hop",0],["Belma",40,10,"Dry Hop",0],["Cascade",40,7.5,"Dry Hop",0]],
     water:{Ca:110,Mg:12,Na:20,SO4:220,Cl:75,Alk:40} },
   { id:"r2", name:"Newy XPA", style:"Australian Extra Pale Ale", baseBatch:40,
     og:1.045, fg:1.008, abv:4.8, ibu:28, yeast:"US-05", yeastForm:"Dry", atten:0.80,
-    tempLo:18, tempHi:20, desc:"Galaxy, Vic Secret and Ella, passionfruit and pine for a Newcastle arvo.",
+    tempLo:18, tempHi:20, mashTemp:66, desc:"Galaxy, Vic Secret and Ella, passionfruit and pine for a Newcastle arvo.",
     ferm:[["Pale Ale Malt (Au)",7.8,4.65],["Wheat Malt (Au)",0.4,5.25],["Carapils / Dextrine",0.2,6.65]],
     hops:[["Galaxy",15,14,"Boil",60],["Vic Secret",20,13,"Whirlpool",20],["Galaxy",30,14,"Whirlpool",20],["Ella",20,15,"Whirlpool",20],["Galaxy",40,14,"Dry Hop",0],["Vic Secret",40,13,"Dry Hop",0]],
     water:{Ca:90,Mg:10,Na:15,SO4:150,Cl:60,Alk:35} },
   { id:"r3", name:"Hunter Valley Hazy IPA", style:"Hazy / NEIPA", baseBatch:40,
     og:1.062, fg:1.012, abv:6.5, ibu:35, yeast:"Verdant IPA / London Ale III", yeastForm:"Liquid", atten:0.74,
-    tempLo:19, tempHi:21, desc:"Soft, juicy and hazy, Citra, Galaxy and Nectaron with oats and wheat.",
+    tempLo:19, tempHi:21, mashTemp:67, desc:"Soft, juicy and hazy, Citra, Galaxy and Nectaron with oats and wheat.",
     ferm:[["Pilsner Malt",8.0,4.65],["Flaked Oats",1.2,5.55],["Wheat Malt",1.0,5.25],["Carapils / Dextrine",0.3,6.65]],
     hops:[["Magnum",15,12,"Boil",60],["Citra",40,12,"Whirlpool",20],["Galaxy",40,14,"Whirlpool",20],["Nectaron",30,13,"Whirlpool",20],["Citra",60,12,"Dry Hop",0],["Galaxy",60,14,"Dry Hop",0],["Nectaron",40,13,"Dry Hop",0]],
     water:{Ca:90,Mg:8,Na:20,SO4:70,Cl:150,Alk:40} },
   { id:"r4", name:"American Red IPA", style:"Red / Amber IPA", baseBatch:40,
     og:1.066, fg:1.012, abv:7.0, ibu:65, yeast:"WLP001 / US-05", yeastForm:"Dry", atten:0.80,
-    tempLo:18, tempHi:20, desc:"Caramel malt backbone with a big Chinook, Centennial and Simcoe hop charge.",
+    tempLo:18, tempHi:20, mashTemp:67, desc:"Caramel malt backbone with a big Chinook, Centennial and Simcoe hop charge.",
     ferm:[["Pale Ale Malt",9.5,4.85],["Munich Dark",0.8,5.45],["Medium Crystal",0.5,5.25],["Carafa Special II",0.15,6.85]],
     hops:[["Chinook",30,13,"Boil",60],["Centennial",20,10,"Boil",15],["Simcoe",20,13,"Boil",15],["Chinook",40,13,"Whirlpool",20],["Centennial",40,10,"Whirlpool",20],["Simcoe",40,13,"Whirlpool",20],["Chinook",40,13,"Dry Hop",0],["Centennial",40,10,"Dry Hop",0]],
     water:{Ca:120,Mg:12,Na:20,SO4:250,Cl:80,Alk:50} },
   { id:"r5", name:"Aussie Classic Lager", style:"Australian Lager", baseBatch:40,
     og:1.045, fg:1.008, abv:4.6, ibu:18, yeast:"SafLager S-23 / W34/70", yeastForm:"Dry", atten:0.78,
-    tempLo:12, tempHi:14, desc:"Crisp, clean and easy drinking, Pride of Ringwood keeps it authentically Australian.",
+    tempLo:12, tempHi:14, mashTemp:64, desc:"Crisp, clean and easy drinking, Pride of Ringwood keeps it authentically Australian.",
     ferm:[["Pilsner Malt (Au)",8.0,4.65],["Flaked Rice",0.8,9.95],["Carapils / Dextrine",0.2,6.65]],
     hops:[["Pride of Ringwood",20,9,"Boil",60],["Pride of Ringwood",10,9,"Boil",15]],
     water:{Ca:50,Mg:8,Na:10,SO4:50,Cl:50,Alk:30} },
   { id:"r6", name:"Dry Irish Stout", style:"Irish Stout", baseBatch:40,
     og:1.044, fg:1.010, abv:4.4, ibu:38, yeast:"Nottingham / WLP004", yeastForm:"Dry", atten:0.75,
-    tempLo:18, tempHi:20, desc:"Roasty, dry and sessionable with flaked barley for a creamy Irish head.",
+    tempLo:18, tempHi:20, mashTemp:66, desc:"Roasty, dry and sessionable with flaked barley for a creamy Irish head.",
     ferm:[["Pale Ale Malt (UK)",6.5,5.95],["Flaked Barley (UK)",1.0,6.25],["Roast Barley (UK)",0.6,6.45]],
     hops:[["East Kent Goldings",40,5.5,"Boil",60]],
     water:{Ca:100,Mg:10,Na:25,SO4:55,Cl:100,Alk:150} },
@@ -127,42 +124,28 @@ const WATER_IONS = ["Ca","Mg","Na","SO4","Cl","Alk"];
 const WATER_LABELS = { Ca:"Calcium", Mg:"Magnesium", Na:"Sodium", SO4:"Sulphate", Cl:"Chloride", Alk:"Alkalinity" };
 const FLORAVILLE_WATER = { Ca:13.1, Mg:5.3, Na:28.0, SO4:32.5, Cl:38.0, Alk:24.0 };
 
-/* ============================================================
-   STYLE GUIDELINES (approximate typical ranges, not an official
-   BJCP reproduction, just a sanity-check guide for the Recipe
-   Detail popup). Matched by exact style name first, then by
-   keyword fallback for imported/custom recipes with a slightly
-   different style string.
-   ============================================================ */
-const STYLE_GUIDELINES = {
-  "West Coast IPA":              { og:[1.056,1.070], fg:[1.008,1.014], ibu:[50,70], abv:[5.5,7.5] },
-  "American / West Coast IPA":   { og:[1.056,1.075], fg:[1.008,1.016], ibu:[45,75], abv:[5.5,8.5] },
-  "Australian Extra Pale Ale":   { og:[1.038,1.050], fg:[1.006,1.012], ibu:[20,40], abv:[3.5,5.0] },
-  "Hazy / NEIPA":                { og:[1.060,1.070], fg:[1.010,1.015], ibu:[25,45], abv:[6.0,9.0] },
-  "Red / Amber IPA":             { og:[1.056,1.070], fg:[1.010,1.016], ibu:[40,70], abv:[5.5,7.5] },
-  "Australian Lager":            { og:[1.038,1.050], fg:[1.006,1.012], ibu:[8,20],  abv:[4.0,5.5] },
-  "Irish Stout":                 { og:[1.036,1.044], fg:[1.007,1.011], ibu:[25,45], abv:[4.0,4.5] },
-  "Belgian Witbier":             { og:[1.044,1.052], fg:[1.008,1.012], ibu:[10,20], abv:[4.5,5.5] },
-  "Double / Imperial NEIPA":     { og:[1.070,1.090], fg:[1.008,1.016], ibu:[40,70], abv:[7.5,10.5] },
-  "Session Pale Ale":            { og:[1.030,1.040], fg:[1.006,1.010], ibu:[20,35], abv:[3.0,4.1] },
-  "Oatmeal Stout":               { og:[1.045,1.065], fg:[1.010,1.018], ibu:[20,40], abv:[4.2,6.0] },
-  "Munich Helles":               { og:[1.044,1.050], fg:[1.008,1.012], ibu:[16,22], abv:[4.7,5.4] }
+/* ---- Brewing salts: ppm contribution per gram dissolved, per litre of the batch liquor.
+   i.e. adding X grams to a liquor volume of V litres raises that ion by (X * factor / V) ppm.
+   Standard values used across most homebrew water calculators (Bru'n Water, Brewer's Friend etc). ---- */
+const GRAIN_ABSORPTION_L_PER_KG = 0.8; // typical water retained by crushed grain in the mash
+const SALT_PPM_PER_GRAM = {
+  gypsum:     { name:"Gypsum (CaSO4·2H2O)",          Ca:61.5, SO4:147.4 },
+  cacl2:      { name:"Calcium Chloride (CaCl2·2H2O)", Ca:72.0, Cl:127.0 },
+  epsom:      { name:"Epsom Salt (MgSO4·7H2O)",       Mg:26.0, SO4:103.0 },
+  bakingsoda: { name:"Baking Soda (NaHCO3)",          Na:27.4, Alk:59.5 }
 };
-// Keyword fallback ladder, checked in order, first match wins.
-const STYLE_GUIDELINE_KEYWORDS = [
-  ["imperial",      "Double / Imperial NEIPA"],
-  ["dipa",          "Double / Imperial NEIPA"],
-  ["hazy",          "Hazy / NEIPA"],
-  ["neipa",         "Hazy / NEIPA"],
-  ["red",           "Red / Amber IPA"],
-  ["amber",         "Red / Amber IPA"],
-  ["west coast",    "West Coast IPA"],
-  ["ipa",           "West Coast IPA"],
-  ["session",       "Session Pale Ale"],
-  ["pale ale",      "Australian Extra Pale Ale"],
-  ["helles",        "Munich Helles"],
-  ["lager",         "Australian Lager"],
-  ["oatmeal",       "Oatmeal Stout"],
-  ["stout",         "Irish Stout"],
-  ["wit",           "Belgian Witbier"]
-];
+
+/* ---- Rough style guideline ranges for the "how does this compare" panel ---- */
+const STYLE_GUIDELINES = {
+  "west coast ipa": { og:[1.056,1.070], fg:[1.008,1.014], abv:[5.5,7.5], ibu:[50,70], ebc:[10,28] },
+  "american ipa": { og:[1.056,1.070], fg:[1.008,1.014], abv:[5.5,7.5], ibu:[40,70], ebc:[10,28] },
+  "hazy / neipa": { og:[1.060,1.070], fg:[1.010,1.015], abv:[6.0,7.5], ibu:[25,60], ebc:[8,18] },
+  "double / imperial neipa": { og:[1.070,1.090], fg:[1.010,1.020], abv:[7.5,10.5], ibu:[35,70], ebc:[8,20] },
+  "red / amber ipa": { og:[1.060,1.070], fg:[1.010,1.015], abv:[6.0,7.5], ibu:[40,70], ebc:[20,45] },
+  "australian extra pale ale": { og:[1.040,1.050], fg:[1.006,1.010], abv:[4.2,5.5], ibu:[20,40], ebc:[6,16] },
+  "session pale ale": { og:[1.033,1.040], fg:[1.006,1.010], abv:[3.5,4.2], ibu:[20,40], ebc:[8,18] },
+  "australian lager": { og:[1.040,1.050], fg:[1.006,1.010], abv:[4.2,5.0], ibu:[15,23], ebc:[6,12] },
+  "irish stout": { og:[1.036,1.044], fg:[1.007,1.011], abv:[4.0,4.5], ibu:[25,45], ebc:[60,90] },
+  "belgian witbier": { og:[1.044,1.052], fg:[1.008,1.012], abv:[4.5,5.5], ibu:[10,20], ebc:[6,10] },
+  "oatmeal stout": { og:[1.048,1.065], fg:[1.010,1.018], abv:[4.2,5.9], ibu:[25,40], ebc:[65,150] }
+};

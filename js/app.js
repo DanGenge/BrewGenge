@@ -7,8 +7,12 @@
 const SB_URL = "https://goojuftzuiwoptjtlwfx.supabase.co";
 const SB_KEY = "sb_publishable_WdvQhwumdXn5c35OdVZasA_sQWK0dM3";
 const STORE = "brewgenge_state_v1";
+const OTP_COOLDOWN_KEY = "brewgenge_otp_last_sent";
+const OTP_COOLDOWN_SECONDS = 60; // matches Supabase's default OTP resend rate limit
 
 let sb = null, USER = null, syncStatus = "local", syncTimer = null;
+let AUTH_INIT_ERROR = null;   // populated if the Supabase SDK never loaded etc.
+let AUTH_CALLBACK_ERROR = null; // populated if the magic-link redirect itself carried an error
 
 /* ---------- State ---------- */
 function defaults(){
@@ -58,6 +62,7 @@ const money = n => (n==null||isNaN(n)) ? "-" : "$"+Number(n).toFixed(2);
 const fmt = (n,d=1) => (n==null||isNaN(n)) ? "-" : Number(n).toFixed(d);
 const uid = p => p+"-"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const fmtDate = iso => { if(!iso) return "-"; try{ return new Date(iso).toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"}); }catch{return "-";} };
+const fmtDateTime = iso => { if(!iso) return "-"; try{ return new Date(iso).toLocaleString("en-AU",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}); }catch{return "-";} };
 
 /* ---------- Recipe access ---------- */
 function allRecipes(){
@@ -80,6 +85,12 @@ function isFav(id){ return (STATE.favourites||[]).includes(id); }
 function toggleFav(id){
   const i = STATE.favourites.indexOf(id);
   if(i>=0) STATE.favourites.splice(i,1); else STATE.favourites.push(id);
+  save();
+}
+function getRating(id){ return (STATE.ratings||{})[id] || 0; }
+function setRating(id, n){
+  if(!STATE.ratings) STATE.ratings = {};
+  STATE.ratings[id] = (STATE.ratings[id] === n) ? 0 : n; // clicking the same star again clears it
   save();
 }
 function ensureLabel(r){
@@ -147,64 +158,50 @@ function togglePantry(recipeId, name, on){
   STATE.pantry[recipeId][name] = on; save();
 }
 
-/* ---------- Ratings ---------- */
-function getRating(id){ return (STATE.ratings||{})[id] || 0; }
-function setRating(id, n){
-  if(!STATE.ratings) STATE.ratings = {};
-  STATE.ratings[id] = (STATE.ratings[id]===n) ? 0 : n; // clicking the same star again clears the rating
-  save();
-}
-
-/* ---------- Brew history (per recipe) ---------- */
-function addBrewSession(id, session){
+/* ---------- Brew sessions (per-recipe brew history log) ---------- */
+function getSessions(id){ return (STATE.brewSessions||{})[id] || []; }
+function addSession(id, entry){
   if(!STATE.brewSessions) STATE.brewSessions = {};
   if(!STATE.brewSessions[id]) STATE.brewSessions[id] = [];
-  session.id = uid("sess");
-  STATE.brewSessions[id].push(session);
+  entry.id = uid("sess"); entry.date = entry.date || new Date().toISOString();
+  STATE.brewSessions[id].push(entry);
   save();
 }
-function deleteBrewSession(id, sessionId){
+function deleteSession(id, sessId){
   if(STATE.brewSessions && STATE.brewSessions[id]){
-    STATE.brewSessions[id] = STATE.brewSessions[id].filter(s=>s.id!==sessionId);
+    STATE.brewSessions[id] = STATE.brewSessions[id].filter(s=>s.id!==sessId);
     save();
   }
 }
 
-/* ---------- Style guideline matching ---------- */
-function findStyleGuideline(styleStr){
-  if(!styleStr) return null;
-  if(STYLE_GUIDELINES[styleStr]) return STYLE_GUIDELINES[styleStr];
-  const s = styleStr.toLowerCase();
-  for(const [kw, key] of STYLE_GUIDELINE_KEYWORDS){
-    if(s.includes(kw)) return STYLE_GUIDELINES[key];
-  }
-  return null;
+/* ---------- Style guideline lookup + rough colour estimate ---------- */
+function findStyleGuideline(styleName){
+  const key = (styleName||"").trim().toLowerCase();
+  return STYLE_GUIDELINES[key] || null;
 }
-
-/* ---------- Rough colour estimate (for a visual swatch only) ---------- */
 function estimateColorEBC(r){
-  const buckets = [
-    [/roast/i, 900], [/chocolate/i, 900], [/black/i, 1300], [/carafa/i, 800],
-    [/crystal|caramel/i, 150], [/munich/i, 20], [/vienna/i, 8], [/melanoidin/i, 60]
-  ];
-  let totalKg=0, weighted=0;
+  // Very rough visual estimate only, weights typical colour contribution per malt type by name keyword.
+  const total = (r.ferm||[]).reduce((s,f)=>s+f[1],0) || 1;
+  let ebc = 0;
   (r.ferm||[]).forEach(f=>{
-    const kg=f[1]||0; totalKg+=kg;
-    let ebc=4;
-    for(const [re,val] of buckets){ if(re.test(f[0])){ ebc=val; break; } }
-    weighted += ebc*kg;
+    const n = f[0].toLowerCase();
+    let malColor = 6; // base pale malt default EBC
+    if(/pilsner/.test(n)) malColor = 4;
+    else if(/vienna/.test(n)) malColor = 8;
+    else if(/munich/.test(n)) malColor = 18;
+    else if(/melanoidin/.test(n)) malColor = 60;
+    else if(/crystal|caramel/.test(n)) malColor = 140;
+    else if(/carafa|roast/.test(n)) malColor = 900;
+    else if(/chocolate/.test(n)) malColor = 900;
+    else if(/carapils|dextrine/.test(n)) malColor = 4;
+    ebc += (f[1]/total) * malColor;
   });
-  const ebc = totalKg>0 ? weighted/totalKg : 8;
-  return { ebc, hex: ebcToHex(ebc) };
-}
-function ebcToHex(ebc){
-  if(ebc<8) return "#f6e8b0";
-  if(ebc<18) return "#e8b34a";
-  if(ebc<35) return "#c97a1f";
-  if(ebc<70) return "#8a4a16";
-  if(ebc<140) return "#5a2c10";
-  if(ebc<400) return "#2a1408";
-  return "#150a06";
+  ebc = Math.max(3, ebc * (total/8)); // scale factor so a "normal" 8kg grist reads sensibly
+  ebc = Math.min(ebc, 900);
+  const hexMap = [[6,"#f6e29a"],[10,"#f0cf6a"],[16,"#e6b13e"],[26,"#d68e2e"],[40,"#b8621e"],[70,"#8a3f18"],[130,"#5a2712"],[300,"#301209"],[900,"#0d0605"]];
+  let hex = "#5a2712";
+  for(const [thresh,h] of hexMap){ if(ebc<=thresh){ hex=h; break; } }
+  return { ebc, hex };
 }
 
 /* ---------- Calculation engine ---------- */
@@ -237,8 +234,49 @@ function calc(r){
   const toBuy = fermCost + hopCost + yeastCost;
   const saving = full - toBuy;
   const strike = totalGrain * eq.mashThickness;
+  const grainAbsorptionL = totalGrain * GRAIN_ABSORPTION_L_PER_KG;
+  const spargeWater = Math.max(0, preboil - strike + grainAbsorptionL);
+  const totalWater = strike + spargeWater;
+  const salts = computeSaltAdditions(r.water || FLORAVILLE_WATER, STATE.sourceWater, totalWater);
   return { sf, eq, ferm, hops, totalGrain, totalHops, ibu, og, fermCost, hopCost, yeastCost, full, toBuy, saving, preboil, strike,
+    grainAbsorptionL, spargeWater, totalWater, salts,
     grainOK: totalGrain <= eq.maxGrain, boilOK: preboil <= eq.maxKettle };
+}
+
+/* ---------- Salt/acid addition calculator ----------
+   Heuristic (the same approach most brewing water calculators use):
+   gypsum bridges the sulphate gap, calcium chloride bridges the chloride
+   gap, epsom salt bridges any remaining magnesium gap, baking soda raises
+   alkalinity if needed, and diluted lactic acid is suggested if the source
+   water's alkalinity is already higher than the style needs. Calcium ends
+   up as a side effect of the sulphate/chloride salts rather than solved
+   for directly, which is standard practice, the sulphate:chloride balance
+   matters far more to flavour than hitting an exact calcium number. ---- */
+function computeSaltAdditions(target, source, totalLiquorL){
+  const V = totalLiquorL > 0 ? totalLiquorL : 1;
+  const deltaSO4 = Math.max(0, (target.SO4||0) - (source.SO4||0));
+  const deltaCl = Math.max(0, (target.Cl||0) - (source.Cl||0));
+  const deltaMg = Math.max(0, (target.Mg||0) - (source.Mg||0));
+  const deltaAlkUp = Math.max(0, (target.Alk||0) - (source.Alk||0));
+  const deltaAlkDown = Math.max(0, (source.Alk||0) - (target.Alk||0));
+
+  const gypsum_g = (deltaSO4 * V) / SALT_PPM_PER_GRAM.gypsum.SO4;
+  const cacl2_g = (deltaCl * V) / SALT_PPM_PER_GRAM.cacl2.Cl;
+  // epsom only tops up whatever magnesium gap is left, sulphate it also contributes is a bonus not double counted against the gypsum target
+  const epsom_g = (deltaMg * V) / SALT_PPM_PER_GRAM.epsom.Mg;
+  const bakingsoda_g = (deltaAlkUp * V) / SALT_PPM_PER_GRAM.bakingsoda.Alk;
+  // 88% lactic acid, mL needed to knock the given ppm of CaCO3-equivalent alkalinity out of V litres
+  const lacticAcid_mL = deltaAlkDown>0 ? (deltaAlkDown * V / 50000 * 90.08/(1.206*0.88)) : 0;
+
+  const resulting = {
+    Ca: (source.Ca||0) + gypsum_g*SALT_PPM_PER_GRAM.gypsum.Ca/V + cacl2_g*SALT_PPM_PER_GRAM.cacl2.Ca/V,
+    Mg: (source.Mg||0) + epsom_g*SALT_PPM_PER_GRAM.epsom.Mg/V,
+    Na: (source.Na||0) + bakingsoda_g*SALT_PPM_PER_GRAM.bakingsoda.Na/V,
+    SO4: (source.SO4||0) + gypsum_g*SALT_PPM_PER_GRAM.gypsum.SO4/V + epsom_g*SALT_PPM_PER_GRAM.epsom.SO4/V,
+    Cl: (source.Cl||0) + cacl2_g*SALT_PPM_PER_GRAM.cacl2.Cl/V,
+    Alk: lacticAcid_mL>0 ? (target.Alk||0) : (source.Alk||0) + bakingsoda_g*SALT_PPM_PER_GRAM.bakingsoda.Alk/V
+  };
+  return { gypsum_g, cacl2_g, epsom_g, bakingsoda_g, lacticAcid_mL, resulting, totalLiquorL: V };
 }
 
 /* ============================================================
@@ -287,9 +325,9 @@ function dash(){
   const c = calc(r);
   $("#app").innerHTML = `
     <div class="card hero">
-      <div class="thumb big">${recipeThumb(r)}</div>
+      <div class="thumb big" style="cursor:pointer;" id="dashThumb">${recipeThumb(r)}</div>
       <div><h2>${esc(r.name)}</h2><div class="muted">${esc(r.style)} · ${esc(r.desc)}</div></div>
-      <div class="heroActions"><button class="btn alt" id="viewRecipeBtn">📖 View Recipe</button></div>
+      <div class="heroActions"><button class="btn alt" id="openDetail">🔍 Open recipe details</button></div>
     </div>
     <div class="card">
       <div class="toolbar">
@@ -313,7 +351,8 @@ function dash(){
       <p>Grain fits mash tun (max ${c.eq.maxGrain} kg)? <span class="${c.grainOK?'badge-ok':'badge-warn'}">${c.grainOK?'OK':'TOO MUCH GRAIN'}</span></p>
       <p>Pre-boil fits kettle (max ${c.eq.maxKettle} L)? <span class="${c.boilOK?'badge-ok':'badge-warn'}">${c.boilOK?'OK':'TOO MUCH LIQUID'}</span></p>
     </div>`;
-  $("#viewRecipeBtn").onclick = ()=> openRecipeModal(r.id);
+  $("#openDetail").onclick = ()=> openRecipeModal(r.id);
+  $("#dashThumb").onclick = ()=> openRecipeModal(r.id);
   $("#recSel").onchange = e=>{ STATE.selectedId=e.target.value; save(); render(); };
   $("#batch").onchange = e=>{ STATE.batchSize=parseFloat(e.target.value)||40; save(); render(); };
   $("#eqSel").onchange = e=>{ STATE.equipmentId=e.target.value; save(); render(); };
@@ -353,9 +392,8 @@ function library(){
       <div id="hiddenBar" class="muted" style="margin-top:8px;"></div>
     </div>
     <div class="card lib-wrap">
-      <table class="lib-table"><thead><tr><th class="col-star"></th><th class="col-brew"></th><th class="col-thumb"></th><th>Recipe</th><th>Style</th><th>ABV</th><th>IBU</th><th>Batch</th><th>Source</th><th>Updated</th><th class="col-view"></th></tr></thead><tbody id="rows"></tbody></table>
-    </div>
-    <div class="note">Click any recipe to open its full details, shopping list, brew history and rating. Use the star to favourite, or the 🍺 icon to switch to it instantly without opening the popup.</div>`;
+      <table class="lib-table"><thead><tr><th class="col-star"></th><th class="col-thumb"></th><th>Recipe</th><th>Style</th><th>ABV</th><th>IBU</th><th>Batch</th><th>Source</th><th>Updated</th><th class="col-actions">Actions</th></tr></thead><tbody id="rows"></tbody></table>
+    </div>`;
   const rows = ()=>{
     const q = ($("#q").value||"").toLowerCase();
     let list = allRecipes().map(r=>({r, custom:isCustom(r.id)}));
@@ -366,23 +404,33 @@ function library(){
     if(favFirst) list.sort((a,b)=>(isFav(b.r.id)?1:0)-(isFav(a.r.id)?1:0));
     $("#count").textContent = `${list.length} recipe${list.length===1?'':'s'}`;
     $("#rows").innerHTML = list.map(({r,custom})=>`
-      <tr class="row-lib" data-open="${r.id}">
-        <td class="col-star"><button class="star ${isFav(r.id)?'on':''}" data-fav="${r.id}" title="Favourite">${isFav(r.id)?'★':'☆'}</button></td>
-        <td class="col-brew"><button class="iconbtn" data-brew="${r.id}" title="Brew this now">🍺</button></td>
+      <tr class="row-lib ${r.id===STATE.selectedId?'sel':''}" data-sel="${r.id}">
+        <td class="col-star"><button class="star ${isFav(r.id)?'on':''}" data-fav="${r.id}">${isFav(r.id)?'★':'☆'}</button></td>
         <td class="col-thumb"><div class="thumb">${recipeThumb(r)}</div></td>
         <td><div class="name">${esc(r.name)}</div><div class="sub">${esc((r.desc||"").split(".")[0])}</div></td>
         <td><span class="pill">${esc(r.style)||'-'}</span></td>
         <td>${fmt(r.abv,1)}%</td><td>${fmt(r.ibu,0)}</td><td>${fmt(r.baseBatch,0)} L</td>
         <td class="muted">${custom?'BrewGenge':'Library'}</td>
         <td class="muted">${custom?fmtDate(r.updatedAt):'-'}</td>
-        <td class="col-view muted">›</td>
-      </tr>`).join("") || `<tr><td colspan="11" style="text-align:center;padding:28px;" class="muted">No recipes match.</td></tr>`;
+        <td class="col-actions"><div class="actions">
+          <button class="iconbtn" data-view="${r.id}" title="View recipe">🔍</button>
+          <button class="iconbtn" data-brew="${r.id}" title="Brew this">🍺</button>
+          <button class="iconbtn" data-dupe="${r.id}" title="Duplicate">⧉</button>
+          <button class="iconbtn" data-exp="${r.id}" title="Export this recipe">⬇</button>
+          <button class="iconbtn danger" data-del="${r.id}" title="${custom?'Delete':'Hide'}">🗑</button>
+        </div></td>
+      </tr>`).join("") || `<tr><td colspan="10" style="text-align:center;padding:28px;" class="muted">No recipes match.</td></tr>`;
     bind();
   };
   const bind = ()=>{
     document.querySelectorAll("[data-fav]").forEach(b=>b.onclick=e=>{e.stopPropagation();toggleFav(b.dataset.fav);rows();});
+    document.querySelectorAll("[data-sel]").forEach(tr=>tr.onclick=()=>{openRecipeModal(tr.dataset.sel);});
+    document.querySelectorAll("[data-view]").forEach(b=>b.onclick=e=>{e.stopPropagation();openRecipeModal(b.dataset.view);});
     document.querySelectorAll("[data-brew]").forEach(b=>b.onclick=e=>{e.stopPropagation();STATE.selectedId=b.dataset.brew;save();PAGE="dashboard";render();});
-    document.querySelectorAll("[data-open]").forEach(tr=>tr.onclick=()=>{ openRecipeModal(tr.dataset.open); });
+    document.querySelectorAll("[data-dupe]").forEach(b=>b.onclick=e=>{e.stopPropagation();const c=cloneRecipe(allRecipes().find(r=>r.id===b.dataset.dupe));STATE.selectedId=saveRecipe(c);rows();});
+    document.querySelectorAll("[data-exp]").forEach(b=>b.onclick=e=>{e.stopPropagation();exportSingle(allRecipes().find(r=>r.id===b.dataset.exp));});
+    document.querySelectorAll("[data-del]").forEach(b=>b.onclick=e=>{e.stopPropagation();const id=b.dataset.del;const cu=isCustom(id);
+      if(confirm(cu?"Delete this BrewGenge recipe permanently?":"Hide this library recipe from your list? You can restore it any time.")){deleteRecipe(id);rows();hiddenBar();}});
   };
   const hiddenBar = ()=>{
     const n=(STATE.hidden||[]).length;
@@ -398,8 +446,6 @@ function library(){
   $("#pack").onclick=packModal;
   $("#imp").onclick=()=>$("#file").click();
   $("#file").onchange=importJSON;
-  // expose row refresh for the modal to call when favourites/etc change while library is the active tab
-  window._brewgengeLibraryRefresh = rows;
 }
 
 /* ---------- Equipment ---------- */
@@ -463,7 +509,6 @@ function equipment(){
 function blankRecipe(){
   return { id:null, name:"", style:"", baseBatch:STATE.batchSize||40, og:1.050, fg:1.010, abv:5.0, ibu:30,
     yeast:"US-05", yeastForm:"Dry", atten:0.78, tempLo:18, tempHi:20, desc:"", custom:true, image:null,
-    sourceNote:null, brewNotes:null, capacityWarning:null,
     ferm:[["Pale Ale Malt",8.0,4.85]], hops:[["Cascade",20,7.5,"Boil",60]], water:Object.assign({},FLORAVILLE_WATER) };
 }
 function create(){
@@ -547,8 +592,6 @@ function findbrew(){
     if(!list || !list.length){ $("#pres").innerHTML=`<span class="warn">Could not find a recipe in that file, check the format.</span>`; return; }
     const d = normalizeRecipe(list[0]);
     if(!d){ $("#pres").innerHTML=`<span class="warn">That recipe doesn't have fermentables or hops I can read, check the format.</span>`; return; }
-    if(!d.sourceNote && o.sourceNote) d.sourceNote = o.sourceNote;
-    if(!d.capacityWarning && o.capacityWarning) d.capacityWarning = o.capacityWarning;
     STATE.draftRecipe=d; save();
     $("#pres").innerHTML=`<span class="ok">Parsed "${esc(d.name)}", OG ${fmt(d.og,3)}, ${d.ferm.length} fermentable(s), ${d.hops.length} hop(s). Opening Create a Brew...</span>`;
     setTimeout(()=>{ PAGE="create"; render(); }, 500);
@@ -590,15 +633,50 @@ function bindOwn(r){ document.querySelectorAll("[data-own]").forEach(c=>c.onchan
 
 /* ---------- Water ---------- */
 function water(){
+  const r = selected();
+  const c = calc(r);
+  const target = r.water || FLORAVILLE_WATER;
+  const s = c.salts;
   $("#app").innerHTML = `
-    <div class="card"><h3>Floraville Water and Salt Guide</h3>
-      <p class="desc">Source figures use Hunter Water published values for the Grahamstown / Tomago supply (covers Newcastle including Floraville). Edit if you have a test result.</p>
+    <div class="card"><p>Recipe: <span class="calc">${esc(r.name)}</span> Batch: <span class="calc">${fmt(STATE.batchSize,1)} L</span> Equipment: <span class="calc">${esc(c.eq.name)}</span></p></div>
+
+    <h2 class="sec">Mash and sparge water</h2>
+    <div class="card stats">
+      ${stat("Total grain", fmt(c.totalGrain,2)+" kg")}
+      ${stat("Strike water (mash-in)", fmt(c.strike,1)+" L")}
+      ${stat("Grain absorption", fmt(c.grainAbsorptionL,1)+" L")}
+      ${stat("Sparge water", fmt(c.spargeWater,1)+" L")}
+      ${stat("Total water needed", fmt(c.totalWater,1)+" L")}
+    </div>
+    <div class="card">
+      <p class="muted">Strike water = total grain &times; mash thickness (${c.eq.mashThickness} L/kg for ${esc(c.eq.name)}). Sparge water tops the kettle up to its pre-boil volume (${fmt(c.preboil,1)} L), after allowing for water the grain itself soaks up (${GRAIN_ABSORPTION_L_PER_KG} L/kg). Heat strike water a few degrees above your target mash temperature since dough-in cools it down, and treat all of it for chlorine/chloramine with Campden before use.</p>
+    </div>
+
+    <h2 class="sec">Source water (edit if you have a test result)</h2>
+    <div class="card">
+      <p class="desc">Figures below default to Hunter Water published values for the Grahamstown / Tomago supply (covers Newcastle including Floraville).</p>
       <div class="fields">${WATER_IONS.map(i=>`<div class="field"><label>${WATER_LABELS[i]} ppm</label><input type="number" step="0.5" data-w="${i}" value="${STATE.sourceWater[i]}"></div>`).join("")}</div>
     </div>
-    <h2 class="sec">Style target for ${esc(selected().name)}</h2>
-    <div class="card"><table><thead><tr><th>Ion</th><th>Source</th><th>Style target</th><th>Difference</th></tr></thead><tbody>
-      ${WATER_IONS.map(i=>{const t=(selected().water||FLORAVILLE_WATER)[i],s=STATE.sourceWater[i],d=t-s;return `<tr><td>${WATER_LABELS[i]}</td><td>${fmt(s,1)}</td><td>${fmt(t,1)}</td><td style="color:${Math.abs(d)>40?'#b42318':'#19753c'}">${d>0?'+':''}${fmt(d,1)}</td></tr>`;}).join("")}
-    </tbody></table><p class="note">Always measure mash pH 10 to 15 min after dough-in and adjust with salts or acid from there. Treat all water for chlorine/chloramine with Campden.</p></div>`;
+
+    <h2 class="sec">Style target for ${esc(r.name)}</h2>
+    <div class="card"><table><thead><tr><th>Ion</th><th>Source</th><th>Style target</th><th>After suggested salts</th><th>Still off by</th></tr></thead><tbody>
+      ${WATER_IONS.map(i=>{
+        const src=STATE.sourceWater[i], tgt=target[i], after=s.resulting[i], diff=after-tgt;
+        return `<tr><td>${WATER_LABELS[i]}</td><td>${fmt(src,1)}</td><td>${fmt(tgt,1)}</td><td><b>${fmt(after,1)}</b></td><td style="color:${Math.abs(diff)>15?'#b42318':'#19753c'}">${diff>0?'+':''}${fmt(diff,1)}</td></tr>`;
+      }).join("")}
+    </tbody></table></div>
+
+    <h2 class="sec">Suggested salt additions (across ${fmt(c.totalWater,1)} L total liquor)</h2>
+    <div class="card">
+      <table><thead><tr><th>Addition</th><th>Amount</th><th>Why</th></tr></thead><tbody>
+        <tr><td>${SALT_PPM_PER_GRAM.gypsum.name}</td><td><b>${fmt(s.gypsum_g,1)} g</b></td><td class="muted">Boosts sulphate for a crisper, drier hop character</td></tr>
+        <tr><td>${SALT_PPM_PER_GRAM.cacl2.name}</td><td><b>${fmt(s.cacl2_g,1)} g</b></td><td class="muted">Boosts chloride for a fuller, rounder malt character</td></tr>
+        <tr><td>${SALT_PPM_PER_GRAM.epsom.name}</td><td><b>${fmt(s.epsom_g,1)} g</b></td><td class="muted">Tops up magnesium, a yeast nutrient, only added if still short after the above</td></tr>
+        <tr><td>${SALT_PPM_PER_GRAM.bakingsoda.name}</td><td><b>${fmt(s.bakingsoda_g,1)} g</b></td><td class="muted">Raises alkalinity, only needed for darker/roastier styles</td></tr>
+        <tr><td>88% Lactic acid</td><td><b>${fmt(s.lacticAcid_mL,2)} mL</b></td><td class="muted">${s.lacticAcid_mL>0 ? "Knocks down excess alkalinity so the mash can reach the right pH" : "Not needed, source alkalinity is already at or below target"}</td></tr>
+      </tbody></table>
+      <div class="note">These are calculated automatically from the gap between your source water and this recipe's target profile, they recalculate whenever you change recipe, batch size or the source water figures above. Treat this as a starting point, not gospel, always measure actual mash pH 10 to 15 minutes after dough-in with a calibrated pH meter (aiming for roughly 5.2 to 5.6) and adjust from there.</div>
+    </div>`;
   document.querySelectorAll("[data-w]").forEach(inp=>inp.onchange=()=>{STATE.sourceWater[inp.dataset.w]=+inp.value||0;save();render();});
 }
 
@@ -608,12 +686,18 @@ function brewday(){
   $("#app").innerHTML = `
     <div class="card"><p>Recipe: <span class="calc">${esc(r.name)}</span> Gear: <span class="calc">${esc(c.eq.name)}</span> Batch: <span class="calc">${fmt(STATE.batchSize,1)} L</span></p></div>
     <div class="card stats">
-      ${stat("Total grain",fmt(c.totalGrain,2)+" kg")}${stat("Strike water",fmt(c.strike,1)+" L")}${stat("Pre-boil",fmt(c.preboil,1)+" L")}
-      ${stat("Grain fit",c.grainOK?'OK':'Too much')}${stat("Kettle fit",c.boilOK?'OK':'Too much')}
+      ${stat("Total grain",fmt(c.totalGrain,2)+" kg")}${stat("Strike water",fmt(c.strike,1)+" L")}${stat("Sparge water",fmt(c.spargeWater,1)+" L")}
+      ${stat("Total water",fmt(c.totalWater,1)+" L")}${stat("Pre-boil volume",fmt(c.preboil,1)+" L")}
     </div>
+    <div class="card stats">
+      ${stat("Grain fit",c.grainOK?'OK':'Too much')}${stat("Kettle fit",c.boilOK?'OK':'Too much')}
+      ${stat("Gypsum",fmt(c.salts.gypsum_g,1)+" g")}${stat("Calcium chloride",fmt(c.salts.cacl2_g,1)+" g")}
+      ${stat("Lactic acid",fmt(c.salts.lacticAcid_mL,2)+" mL")}
+    </div>
+    <div class="card"><p class="muted">Full salt breakdown (including Epsom salt and baking soda where relevant) is on the Water tab, salts are calculated automatically from this recipe's target water profile.</p></div>
     <h2 class="sec">Process checklist</h2>
     <div class="card"><ul class="check">
-      ${["Treat all brewing water for chlorine / chloramine","Heat strike water and dough in","Mash 60 min at target temperature","Mash out","Sparge to pre-boil volume","Boil and follow the Hops schedule","Whirlpool and stand","Chill to pitch temperature","Aerate and pitch yeast, record OG"].map(s=>`<li><label><input type="checkbox"> ${s}</label></li>`).join("")}
+      ${["Treat all brewing water for chlorine / chloramine","Add calculated salts to the strike and sparge water","Heat strike water and dough in","Mash 60 min at target temperature","Mash out","Sparge with the calculated sparge water to reach pre-boil volume","Boil and follow the Hops schedule","Whirlpool and stand","Chill to pitch temperature","Aerate and pitch yeast, record OG"].map(s=>`<li><label><input type="checkbox"> ${s}</label></li>`).join("")}
     </ul></div>`;
 }
 
@@ -695,31 +779,104 @@ function supplier(){
     <div class="card">${SUPPLIERS.map(s=>`<div style="margin-bottom:12px;border-bottom:1px solid #efeae4;padding-bottom:10px;"><b><a href="${s.url}" target="_blank">${esc(s.name)}</a></b> <span class="muted">${esc(s.location)}</span><p class="muted" style="margin:4px 0;">${esc(s.notes)}</p></div>`).join("")}</div>`;
 }
 
-/* ---------- Account & Sync ---------- */
+/* ============================================================
+   Account & Sync — hardened login flow
+   ============================================================ */
+function secondsLeftOnCooldown(){
+  const last = parseInt(localStorage.getItem(OTP_COOLDOWN_KEY) || "0", 10);
+  const elapsed = (Date.now() - last) / 1000;
+  return Math.max(0, Math.ceil(OTP_COOLDOWN_SECONDS - elapsed));
+}
+let cooldownTimer = null;
 function account(){
   const ready = !!sb;
+  const cooldown = secondsLeftOnCooldown();
   $("#app").innerHTML = `
     <div class="card"><h3>Account & Sync</h3>
-      <p class="desc">Sign in with your email to back up recipes, gear, pantry and images to the cloud and use BrewGenge across devices. Give a mate a copy and everyone stays separate, each account has its own private data. Skip it and everything still works, saved in this browser.</p>
+      <p class="desc">Sign in with your email to back up recipes, gear, pantry, ratings and images to the cloud and use BrewGenge across devices. Give a mate a copy of the site and everyone stays completely separate, each account only ever sees its own private data. Skip this entirely and everything still works, saved in this browser only.</p>
       <p>Status: <span id="syncStatusBadge" class="${USER?'badge-ok':''}">${USER?'Signed in as '+esc(USER.email):'Not signed in'}</span></p>
     </div>
-    ${!ready?`<div class="card"><p class="warn">Supabase library not loaded (offline, or the CDN is blocked). Local mode still works fully.</p></div>`:
-      USER?`<div class="card"><div class="toolbar"><button class="btn" id="syncNow">Sync now</button><button class="btn alt" id="out">Sign out</button></div></div>`:
-      `<div class="card"><div class="field" style="max-width:320px;"><label>Email</label><input id="email" type="email" placeholder="you@example.com"></div><br><button class="btn" id="signin">Send magic link</button><div id="msg" style="margin-top:10px;"></div></div>`}
+
+    ${AUTH_INIT_ERROR ? `<div class="card"><p class="warn"><b>Supabase didn't load:</b> ${esc(AUTH_INIT_ERROR)}</p><p class="muted">This usually means the browser blocked the Supabase script (an ad-blocker, privacy extension, or corporate network filter), or you're offline. Local mode still works fully, try again on a different network or with extensions disabled.</p></div>` : ""}
+
+    ${AUTH_CALLBACK_ERROR ? `<div class="card"><p class="warn"><b>The magic link didn't work:</b> ${esc(AUTH_CALLBACK_ERROR)}</p><p class="muted">${authErrorAdvice(AUTH_CALLBACK_ERROR)}</p></div>` : ""}
+
+    ${!ready ? "" :
+      USER ? `<div class="card"><div class="toolbar"><button class="btn" id="syncNow">Sync now</button><button class="btn alt" id="out">Sign out</button></div></div>`
+      : `<div class="card">
+          <div class="field" style="max-width:320px;"><label>Email</label><input id="email" type="email" placeholder="you@example.com" autocomplete="email"></div><br>
+          <button class="btn" id="signin" ${cooldown>0?'disabled':''}>${cooldown>0 ? 'Wait '+cooldown+'s to resend' : 'Send magic link'}</button>
+          <div id="msg" style="margin-top:10px;"></div>
+        </div>`}
+
+    <div class="card"><h3>Troubleshooting a magic link that isn't arriving</h3>
+      <p class="desc">This app can't verify Supabase's email delivery for you, since that happens entirely on Supabase's side once the request is sent. If the button says it sent successfully but no email shows up, check these, in order:</p>
+      <ol style="margin:8px 0 0; padding-left:20px; font-size:.86rem; color:var(--muted); line-height:1.7;">
+        <li><b>Spam / Junk folder</b> first, always. Supabase's default sending address gets filtered by some providers.</li>
+        <li><b>Redirect URL allow-list</b> in your Supabase project: <span class="pill">Authentication → URL Configuration</span>. The exact page URL below must be added there, or Supabase will reject the sign-in silently or bounce you to an error page after clicking the link.</li>
+        <li><b>Rate limits</b>: Supabase's free tier only allows a new OTP email roughly once every 60 seconds per address, and a small number of emails per hour project-wide. If you've tested a few times quickly, wait a few minutes.</li>
+        <li><b>Site URL</b> in the same settings screen should also be set to your GitHub Pages URL, not left as the Supabase default localhost address.</li>
+      </ol>
+      <p class="muted" style="margin-top:10px;">Current page URL, copy this exactly into the Redirect URLs allow-list:</p>
+      <div class="calc" style="word-break:break-all;">${esc(location.href.split("#")[0])}</div>
+    </div>
+
     <div class="card"><h3>Sharing recipes with mates</h3>
-      <p class="desc">Use <b>Export Recipe Pack</b> in the Recipe Library to export all recipes, favourites, or your BrewGenge originals as one JSON file. Uploaded images are embedded and travel with the recipe. Your mate imports it and it lands in their My Recipes. The Share button inside a recipe's popup uses your device's native share sheet where available, or copies a text summary to your clipboard.</p>
+      <p class="desc">Use <b>Export Recipe Pack</b> in the Recipe Library to export all recipes, favourites, or your BrewGenge originals as one JSON file. Uploaded images are embedded and travel with the recipe. Your mate imports it and it lands in their My Recipes. This works with or without signing in, it doesn't need an account at all.</p>
     </div>`;
+
   if(USER){
     $("#syncNow").onclick=()=>cloudPush(true);
     $("#out").onclick=async()=>{ await sb.auth.signOut(); USER=null; syncStatus="local"; render(); };
   } else if(ready){
+    $("#email").addEventListener("keydown", e=>{ if(e.key==="Enter" && !$("#signin").disabled) $("#signin").click(); });
     $("#signin").onclick=async()=>{
-      const email=$("#email").value.trim(); if(!email){$("#msg").innerHTML=`<span class="warn">Enter an email.</span>`;return;}
-      $("#msg").innerHTML=`<span class="muted">Sending...</span>`;
-      const { error } = await sb.auth.signInWithOtp({ email, options:{ emailRedirectTo:location.href } });
-      $("#msg").innerHTML = error?`<span class="warn">${esc(error.message)}</span>`:`<span class="ok">Check your email for the sign-in link.</span>`;
+      const emailEl = $("#email");
+      const email = emailEl.value.trim();
+      const msgEl = $("#msg");
+      if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+        msgEl.innerHTML = `<span class="warn">Enter a valid email address.</span>`;
+        return;
+      }
+      msgEl.innerHTML = `<span class="muted">Sending...</span>`;
+      $("#signin").disabled = true;
+      try{
+        const { error } = await sb.auth.signInWithOtp({
+          email,
+          options: { emailRedirectTo: location.href.split("#")[0] }
+        });
+        if(error){
+          msgEl.innerHTML = `<span class="warn">${esc(error.message)}</span>`;
+          $("#signin").disabled = false;
+        } else {
+          localStorage.setItem(OTP_COOLDOWN_KEY, String(Date.now()));
+          msgEl.innerHTML = `<span class="ok">Magic link sent to ${esc(email)}. Check your inbox (and spam folder), it can take a minute or two.</span>`;
+          startCooldownCountdown();
+        }
+      }catch(e){
+        msgEl.innerHTML = `<span class="warn">Network error contacting Supabase: ${esc(e.message)}. Check your internet connection and try again.</span>`;
+        $("#signin").disabled = false;
+      }
     };
+    if(cooldown>0) startCooldownCountdown();
   }
+}
+function authErrorAdvice(msg){
+  const m = (msg||"").toLowerCase();
+  if(/expired/.test(m)) return "The link had already expired (they're time-limited). Request a fresh one below.";
+  if(/redirect/.test(m) || /url/.test(m)) return "This is almost always the Redirect URL allow-list in your Supabase project settings, see the checklist below.";
+  if(/rate/.test(m) || /too many/.test(m)) return "You've requested too many links too quickly, Supabase enforces a short cooldown. Wait a minute and try again.";
+  return "See the checklist below for the most common causes.";
+}
+function startCooldownCountdown(){
+  clearInterval(cooldownTimer);
+  cooldownTimer = setInterval(()=>{
+    const left = secondsLeftOnCooldown();
+    const btn = $("#signin");
+    if(!btn){ clearInterval(cooldownTimer); return; }
+    if(left<=0){ btn.disabled=false; btn.textContent="Send magic link"; clearInterval(cooldownTimer); }
+    else { btn.disabled=true; btn.textContent = "Wait "+left+"s to resend"; }
+  }, 1000);
 }
 
 /* ---------- Read Me ---------- */
@@ -728,18 +885,14 @@ function readme(){
     <div class="card"><h3>How to use BrewGenge</h3><ol>
       <li>Pick a recipe and batch size on the Dashboard, everything scales automatically.</li>
       <li>Choose your gear under Equipment, capacity checks follow it.</li>
-      <li>Click any recipe in the Recipe Library to open its full popup: clear image, shopping list, style check, brew history and a one-click Brew button.</li>
-      <li>Tick "Already have?" on Fermentables/Hops (or right inside the popup) to drop pantry items from the Cost.</li>
-      <li>Brew Day and Fermentation are your live log for whatever you're currently brewing.</li>
+      <li>Click 🔍 on any recipe for the full detail popup, image, style check, live shopping list, rating and brew history.</li>
+      <li>Tick "Already have?" on Fermentables/Hops (or inside the popup) to drop pantry items from the Cost.</li>
+      <li>Brew Day and Fermentation are your live log.</li>
     </ol></div>
-    <div class="card"><h3>The Recipe popup</h3>
-      <p>Clicking a recipe opens a detail view similar to Brewfather/Grainfather's community recipe browser: a large image (click it to change), the full shopping list with live pantry checkboxes and cost, a style range check (is your OG/FG/IBU/ABV typical for the style?), a personal 1 to 5 star rating, and a brew history log so you can record actual results each time you brew it.</p>
-      <p><b>Share</b> uses your device's native share sheet if it has one (most phones), or copies a plain-text summary to your clipboard as a fallback. <b>Export</b> downloads the full recipe as JSON with any photo embedded, this is the most reliable way to send an exact copy of a recipe to a mate running their own copy of BrewGenge.</p>
-    </div>
     <div class="card"><h3>Sharing recipe packs</h3>
-      <p>Recipe Library → Export Recipe Pack. Choose all recipes, favourites, or BrewGenge originals. Uploaded images are embedded as Base64 inside the JSON and import with the recipe.</p>
+      <p>Recipe Library → Export Recipe Pack. Choose all recipes, favourites, or BrewGenge originals. Uploaded images are embedded as Base64 inside the JSON and import with the recipe. Single recipes can be exported with the ⬇ icon on each row.</p>
       <p>Importing understands both BrewGenge's own format AND common "verbose" recipe JSON (fermentables/hops as named objects, e.g. from an AI chat search). If a file genuinely doesn't contain readable ingredients, you'll get a clear error instead of a blank recipe.</p>
-      <div class="note"><b>No additional SQL is required for recipe packs.</b> They work entirely in the browser. A true "public community" sharing feature, or a proper QR code, would need a real backend server, this app is static and doesn't have one.</div>
+      <div class="note"><b>No additional SQL is required for recipe packs or for signing in.</b> They work entirely in the browser (packs) or against the single existing sync table (sign-in). A future "BrewGenge Community" feature, live recipe sharing between different accounts, discovery, following other brewers, would need a new Supabase migration since it requires proper cross-account ownership and visibility rules. Simple export/import already covers "share with a mate" without needing that.</div>
     </div>
     <div class="card"><h3>Custom logo and recipe photos</h3>
       <p>The BrewGenge crest and every recipe icon are built-in vector art, so nothing is ever a broken image. To use your own logo: add a file to <code>img/logo.jpeg</code> (or <code>.jpg</code> / <code>.png</code>) in your repo, lowercase filename exactly. GitHub Pages is case-sensitive, so <code>Logo.JPEG</code> will NOT match <code>logo.jpeg</code>.</p>
@@ -752,279 +905,195 @@ function readme(){
 }
 
 /* ============================================================
-   RECIPE DETAIL POPUP
-   (image, shopping list, style check, rating, brew history,
-    brew/share/export/duplicate/edit/delete)
+   Recipe Detail Modal (Brewfather / Grainfather style popup)
    ============================================================ */
 function openRecipeModal(id){
+  STATE.selectedId = id; save();
   document.querySelectorAll(".recipe-modal-backdrop").forEach(m=>m.remove());
-  const m = document.createElement("div");
-  m.className = "modal recipe-modal-backdrop";
-  document.body.appendChild(m);
-  renderRecipeModal(m, id);
-  const escHandler = (e)=>{ if(e.key==="Escape") closeRecipeModal(); };
-  m._escHandler = escHandler;
-  document.addEventListener("keydown", escHandler);
-  m.addEventListener("click", e=>{ if(e.target===m) closeRecipeModal(); });
+  const backdrop = document.createElement("div");
+  backdrop.className = "recipe-modal-backdrop";
+  backdrop.id = "recipeModalBackdrop";
+  document.body.appendChild(backdrop);
+  refreshRecipeModal(id);
+  document.addEventListener("keydown", modalEscHandler);
+  backdrop.addEventListener("click", e=>{ if(e.target===backdrop) closeRecipeModal(); });
 }
+function modalEscHandler(e){ if(e.key==="Escape") closeRecipeModal(); }
 function closeRecipeModal(){
-  const m = document.querySelector(".recipe-modal-backdrop");
-  if(!m) return;
-  if(m._escHandler) document.removeEventListener("keydown", m._escHandler);
-  m.remove();
-  if(PAGE==="library" && typeof window._brewgengeLibraryRefresh==="function") window._brewgengeLibraryRefresh();
+  document.removeEventListener("keydown", modalEscHandler);
+  const b = document.getElementById("recipeModalBackdrop");
+  if(b) b.remove();
+  if(PAGE==="library" || PAGE==="dashboard") render();
 }
 function refreshRecipeModal(id){
-  const m = document.querySelector(".recipe-modal-backdrop");
-  if(!m) return;
-  const bodyEl = m.querySelector(".rm-body");
-  const scrollTop = bodyEl ? bodyEl.scrollTop : 0;
-  renderRecipeModal(m, id, scrollTop);
-}
-function buildGuidelinePanel(r, guide){
-  if(!guide){
-    return `<p class="muted">No typical style range on file for "${esc(r.style||'this style')}", figures are shown without a comparison.</p>`;
-  }
-  const rows = [ ["OG", r.og, guide.og, 3], ["FG", r.fg, guide.fg, 3], ["IBU", r.ibu, guide.ibu, 0], ["ABV %", r.abv, guide.abv, 1] ];
-  return `<table class="gl-table"><tbody>${rows.map(([label,val,range,dp])=>{
-    const lo=range[0], hi=range[1];
-    let status="ok", text="In range";
-    if(val<lo){ status="warn"; text="Below typical"; }
-    else if(val>hi){ status="warn"; text="Above typical"; }
-    return `<tr><td>${label}</td><td><b>${fmt(val,dp)}</b></td><td class="muted">${fmt(lo,dp)}\u2013${fmt(hi,dp)}</td><td><span class="badge-${status}">${text}</span></td></tr>`;
-  }).join("")}</tbody></table><p class="muted" style="margin-top:8px;">Typical range shown as a rough guide only, not an official style body reproduction.</p>`;
-}
-function starsHTML(id){
-  const r = getRating(id);
-  let h = '<div class="rm-stars">';
-  for(let i=1;i<=5;i++) h += `<button class="rm-star ${i<=r?'on':''}" data-star="${i}" title="Rate ${i}/5">${i<=r?'★':'☆'}</button>`;
-  h += `<span class="muted rm-stars-label">${r>0?'Your rating: '+r+'/5':'Rate this brew'}</span></div>`;
-  return h;
-}
-function sessionsTableHTML(id){
-  const sessions = (STATE.brewSessions||{})[id] || [];
-  if(!sessions.length) return `<p class="muted">No brews logged yet. Track your actual results each time you brew this recipe.</p>`;
-  return `<table><thead><tr><th>Date</th><th>Batch</th><th>Actual OG</th><th>Actual FG</th><th>Notes</th><th></th></tr></thead><tbody>
-    ${sessions.slice().reverse().map(s=>`<tr><td>${esc(s.date)}</td><td>${s.batchSize?fmt(s.batchSize,0)+' L':'-'}</td><td>${s.actualOG?fmt(s.actualOG,3):'-'}</td><td>${s.actualFG?fmt(s.actualFG,3):'-'}</td><td class="muted">${esc(s.notes||'')}</td><td><button class="iconbtn danger" data-delsess="${s.id}">🗑</button></td></tr>`).join("")}
-  </tbody></table>`;
-}
-function buildShareText(r){
-  const c = calc(r);
-  const lines = [];
-  lines.push(`${r.name} \u2014 ${r.style||""}`.trim());
-  lines.push(`OG ${fmt(r.og,3)}  FG ${fmt(r.fg,3)}  ABV ${fmt(r.abv,1)}%  IBU ${fmt(r.ibu,0)}`);
-  lines.push(`Batch: ${fmt(STATE.batchSize,1)} L (recipe base ${fmt(r.baseBatch,0)} L)`);
-  lines.push("");
-  lines.push("Fermentables:");
-  c.ferm.forEach(f=> lines.push(`  ${fmt(f.kg,2)} kg  ${f.name}`));
-  lines.push("Hops:");
-  c.hops.forEach(h=> lines.push(`  ${fmt(h.g,1)} g  ${h.name}  (${h.stage}${h.stage!=="Dry Hop" ? ", "+h.time+" min" : ""})`));
-  lines.push("");
-  lines.push(`Yeast: ${r.yeast||"-"}`);
-  lines.push("");
-  lines.push("Shared from BrewGenge, export the full JSON in the app for exact data and any photo.");
-  return lines.join("\n");
-}
-async function shareRecipe(r){
-  const text = buildShareText(r);
-  if(navigator.share){
-    try{ await navigator.share({ title: r.name, text }); return {ok:true, method:"share"}; }
-    catch(e){ if(e && e.name==="AbortError") return {ok:false, method:"cancelled"}; }
-  }
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    try{ await navigator.clipboard.writeText(text); return {ok:true, method:"clipboard"}; }
-    catch(e){ /* fall through to manual */ }
-  }
-  return {ok:false, method:"manual", text};
-}
-function showShareStatus(m, msg, textForManualCopy){
-  let el = m.querySelector("#rmShareStatus");
-  if(!el){
-    el = document.createElement("div");
-    el.id = "rmShareStatus";
-    el.className = "note";
-    el.style.margin = "10px 0";
-    const body = m.querySelector(".rm-body");
-    if(body) body.prepend(el);
-  }
-  if(textForManualCopy){
-    el.innerHTML = `${esc(msg)}<br><textarea readonly style="width:100%;height:90px;margin-top:6px;">${esc(textForManualCopy)}</textarea>`;
-  } else {
-    el.textContent = msg;
-    setTimeout(()=>{ if(el && el.parentNode) el.remove(); }, 2200);
-  }
-}
-function renderRecipeModal(m, id, restoreScroll){
+  const backdrop = document.getElementById("recipeModalBackdrop");
+  if(!backdrop) return;
   const r = allRecipes().find(x=>x.id===id);
   if(!r){ closeRecipeModal(); return; }
-  const custom = isCustom(id);
   const c = calc(r);
-  const guide = findStyleGuideline(r.style);
+  const custom = isCustom(r.id);
+  const guideline = findStyleGuideline(r.style);
   const color = estimateColorEBC(r);
-  m.innerHTML = `
-    <div class="modalbox recipe-modal-box">
+  const rating = getRating(r.id);
+  const sessions = getSessions(r.id);
+
+  backdrop.innerHTML = `
+    <div class="recipe-modal-box">
       <div class="rm-header">
-        <div class="rm-thumb-wrap">
-          <div class="thumb big">${recipeThumb(r)}</div>
-          <button class="rm-thumb-edit" id="rmThumbEdit" title="Change image">🖼</button>
-          <input type="file" id="rmImgFile" accept="image/*" hidden>
-        </div>
-        <div class="rm-title">
-          <input type="text" id="rmNameInput" class="rm-name-input" value="${esc(r.name)}">
-          <div class="rm-meta">
-            <span class="pill">${esc(r.style||"Style not set")}</span>
-            <span class="muted">${custom?"BrewGenge original":"Recipe Library"}</span>
-          </div>
-          ${starsHTML(id)}
-        </div>
+        <input id="rmNameInput" value="${esc(r.name)}">
         <div class="rm-headicons">
-          <button class="iconbtn" id="rmFavBtn" title="Toggle favourite">${isFav(id)?"\u2605":"\u2606"}</button>
+          <button class="iconbtn" id="rmDupBtn" title="Duplicate">⧉</button>
+          <button class="iconbtn" id="rmExportBtn" title="Export as JSON">⬇</button>
           <button class="iconbtn" id="rmShareBtn" title="Share">📤</button>
-          <button class="iconbtn" id="rmExportBtn" title="Export JSON">⬇</button>
-          <button class="iconbtn" id="rmCloseBtn" title="Close (Esc)">✕</button>
+          <button class="iconbtn danger" id="rmDelBtn" title="${custom?'Delete':'Hide'}">🗑</button>
+          <button class="iconbtn" id="rmCloseBtn" title="Close">✕</button>
         </div>
       </div>
-
-      ${r.capacityWarning ? `<div class="note" style="margin:10px 22px 0;">⚠️ ${esc(r.capacityWarning)}</div>` : ""}
-
       <div class="rm-body">
-        <div class="stats" style="margin-top:14px;">
-          ${stat("Est. OG", fmt(r.og,3))}${stat("Est. FG", fmt(r.fg,3))}${stat("ABV", fmt(r.abv,1)+"%")}${stat("IBU", fmt(r.ibu,0))}
+        <div class="rm-top">
+          <div class="rm-thumb-wrap" id="rmThumbWrap">
+            <div class="thumb big">${recipeThumb(r)}</div>
+          </div>
+          <input type="file" id="rmImgFile" accept="image/*" hidden>
+          <div class="rm-topinfo">
+            <div class="pill">${esc(r.style)||'Uncategorised'}</div>
+            <div class="rm-stars">
+              ${[1,2,3,4,5].map(n=>`<button data-star="${n}" class="${n<=rating?'on':''}">★</button>`).join("")}
+            </div>
+            <p class="desc">${esc(r.desc||"")}</p>
+            ${r.capacityWarning ? `<div class="note">${esc(r.capacityWarning)}</div>` : ""}
+          </div>
         </div>
 
-        <h2 class="sec">Style check</h2>
-        <div class="card">${buildGuidelinePanel(r, guide)}</div>
+        <h2 class="sec">Batch setup</h2>
+        <div class="toolbar">
+          <div class="field"><label>Batch into fermenter (L)</label><input type="number" step="0.5" id="rmBatch" value="${STATE.batchSize}"></div>
+          <div class="field"><label>Equipment</label><select id="rmEq">${equipOptions()}</select></div>
+          <div class="field"><label>Scale</label><span class="calc">${fmt(c.sf,2)}x</span></div>
+        </div>
 
-        <h2 class="sec">Batch &amp; equipment</h2>
+        <h2 class="sec">Vitals</h2>
+        <div class="stats">
+          ${stat("OG", fmt(r.og,3))}${stat("FG", fmt(r.fg,3))}${stat("ABV", fmt(r.abv,1)+"%")}${stat("IBU", fmt(c.ibu,0))}
+          ${stat("Colour", `<span class="rm-colorswatch" style="background:${color.hex}"></span>${fmt(color.ebc,0)} EBC`)}
+        </div>
+
+        ${guideline ? buildGuidelinePanel(r, guideline) : `<div class="card"><p class="muted">No typical style range on file for "${esc(r.style)}", vitals shown above only.</p></div>`}
+
+        <h2 class="sec">${esc(c.eq.name)} capacity</h2>
         <div class="card">
-          <div class="toolbar">
-            <div class="field"><label>Batch into fermenter (L)</label><input type="number" step="0.5" id="rmBatch" value="${STATE.batchSize}"></div>
-            <div class="field"><label>Equipment</label><span class="calc">${esc(c.eq.name)}</span></div>
-            <div class="field"><label>Scale</label><span class="calc">${fmt(c.sf,2)}x</span></div>
-            <div class="field"><label>Colour (est.)</label><span class="calc" style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:14px;border-radius:3px;background:${color.hex};display:inline-block;border:1px solid rgba(0,0,0,0.15);"></span>${fmt(color.ebc,0)} EBC</span></div>
-          </div>
-          <p>Grain fits mash tun (max ${c.eq.maxGrain} kg)? <span class="${c.grainOK?"badge-ok":"badge-warn"}">${c.grainOK?"OK":"TOO MUCH GRAIN"}</span>
-           &nbsp; Pre-boil fits kettle (max ${c.eq.maxKettle} L)? <span class="${c.boilOK?"badge-ok":"badge-warn"}">${c.boilOK?"OK":"TOO MUCH LIQUID"}</span></p>
+          <p>Grain fits mash tun (max ${c.eq.maxGrain} kg)? <span class="${c.grainOK?'badge-ok':'badge-warn'}">${c.grainOK?'OK':'TOO MUCH GRAIN'}</span></p>
+          <p>Pre-boil fits kettle (max ${c.eq.maxKettle} L)? <span class="${c.boilOK?'badge-ok':'badge-warn'}">${c.boilOK?'OK':'TOO MUCH LIQUID'}</span></p>
         </div>
 
         <h2 class="sec">Shopping list</h2>
-        <div class="card">
-          <h3>Fermentables</h3>
-          <table><thead><tr><th>Have?</th><th>Ingredient</th><th>Amount</th><th>$/kg</th><th>Cost</th></tr></thead><tbody>
-            ${c.ferm.map(f=>`<tr class="${f.owned?"owned":""}"><td><input type="checkbox" data-rmown="${esc(f.name)}" ${f.owned?"checked":""}></td><td>${esc(f.name)}</td><td>${fmt(f.kg,2)} kg</td><td>${money(f.price)}</td><td>${f.owned?`<span class="strike">${money(f.kg*f.price)}</span>$0.00`:money(f.kg*f.price)}</td></tr>`).join("")}
-          </tbody></table>
-          <h3 style="margin-top:14px;">Hops</h3>
-          <table><thead><tr><th>Have?</th><th>Hop</th><th>Amount</th><th>Stage</th><th>Cost</th></tr></thead><tbody>
-            ${c.hops.map(h=>`<tr class="${h.owned?"owned":""}"><td><input type="checkbox" data-rmown="${esc(h.name)}" ${h.owned?"checked":""}></td><td>${esc(h.name)}</td><td>${fmt(h.g,1)} g</td><td>${h.stage}</td><td>${h.owned?`<span class="strike">${money(h.g*h.price)}</span>$0.00`:money(h.g*h.price)}</td></tr>`).join("")}
-          </tbody></table>
-          <p style="margin-top:10px;"><b>Yeast:</b> ${esc(r.yeast||"-")} (${esc(r.yeastForm||"Dry")})</p>
-          <div class="stats" style="margin-top:10px;">
-            ${stat("Total to buy", money(c.toBuy))}${stat("Pantry saving", money(c.saving))}${stat("Cost / litre", money(c.toBuy/STATE.batchSize))}
-          </div>
-        </div>
-
-        ${(r.sourceNote || r.desc || (r.brewNotes && r.brewNotes.length)) ? `
-        <h2 class="sec">Notes</h2>
-        <div class="card">
-          ${r.sourceNote?`<p class="muted"><b>Source:</b> ${esc(r.sourceNote)}</p>`:""}
-          ${r.desc?`<p>${esc(r.desc)}</p>`:""}
-          ${(r.brewNotes&&r.brewNotes.length)?`<ul>${r.brewNotes.map(n=>`<li>${esc(n)}</li>`).join("")}</ul>`:""}
-        </div>` : ""}
+        <div class="card"><table><thead><tr><th>Already have?</th><th>Ingredient</th><th>Amount</th><th>Cost</th></tr></thead><tbody>
+          ${c.ferm.map(f=>`<tr class="rm-shoprow ${f.owned?'owned':''}"><td><input type="checkbox" data-rmown="${esc(f.name)}" ${f.owned?'checked':''}></td><td>${esc(f.name)}</td><td>${fmt(f.kg,2)} kg</td><td>${f.owned?`<span class="strike">${money(f.kg*f.price)}</span>$0.00`:money(f.kg*f.price)}</td></tr>`).join("")}
+          ${c.hops.map(h=>`<tr class="rm-shoprow ${h.owned?'owned':''}"><td><input type="checkbox" data-rmown="${esc(h.name)}" ${h.owned?'checked':''}></td><td>${esc(h.name)} <span class="muted">(${h.stage})</span></td><td>${fmt(h.g,1)} g</td><td>${h.owned?`<span class="strike">${money(h.g*h.price)}</span>$0.00`:money(h.g*h.price)}</td></tr>`).join("")}
+          <tr><td></td><td>Yeast: ${esc(r.yeast)} (${r.yeastForm})</td><td></td><td>${money(c.yeastCost)}</td></tr>
+          <tr class="total"><td></td><td>Total to buy</td><td></td><td>${money(c.toBuy)}</td></tr>
+        </tbody></table></div>
 
         <h2 class="sec">Brew history</h2>
         <div class="card">
-          ${sessionsTableHTML(id)}
-          <div class="toolbar" style="margin-top:12px;">
-            <div class="field"><label>Date</label><input type="date" id="rmSessDate" value="${new Date().toISOString().slice(0,10)}"></div>
-            <div class="field"><label>Actual OG</label><input type="number" step="0.001" id="rmSessOG" placeholder="1.0xx"></div>
-            <div class="field"><label>Actual FG</label><input type="number" step="0.001" id="rmSessFG" placeholder="1.0xx"></div>
-            <div class="field" style="flex:1;min-width:180px;"><label>Notes</label><input type="text" id="rmSessNotes" placeholder="How did it turn out?"></div>
-            <button class="btn alt" id="rmAddSess">+ Log this brew</button>
+          <div class="fields">
+            <div class="field"><label>Actual OG</label><input type="number" step="0.001" id="rmSessOG" placeholder="1.052"></div>
+            <div class="field"><label>Actual FG</label><input type="number" step="0.001" id="rmSessFG" placeholder="1.011"></div>
+            <div class="field"><label>Notes</label><input type="text" id="rmSessNotes" placeholder="Tasting notes, tweaks for next time..."></div>
           </div>
+          <br><button class="btn alt" id="rmAddSess">+ Log this brew</button>
+          ${sessions.length ? `<table style="margin-top:14px;"><thead><tr><th>Date</th><th>OG</th><th>FG</th><th>ABV</th><th>Notes</th><th></th></tr></thead><tbody>
+            ${sessions.slice().reverse().map(s=>{
+              const abv = (s.og && s.fg) ? ((s.og-s.fg)*131.25).toFixed(1)+"%" : "-";
+              return `<tr><td class="muted">${fmtDateTime(s.date)}</td><td>${s.og?fmt(s.og,3):'-'}</td><td>${s.fg?fmt(s.fg,3):'-'}</td><td>${abv}</td><td>${esc(s.notes||"")}</td><td><button class="iconbtn danger" data-delsess="${s.id}">🗑</button></td></tr>`;
+            }).join("")}
+          </tbody></table>` : `<p class="muted" style="margin-top:10px;">No brews logged yet, add your first one above once it's in the fermenter.</p>`}
         </div>
-      </div>
 
+        ${custom ? `<h2 class="sec">Edit ingredients</h2><div class="card"><button class="btn alt" id="rmEditBtn">✎ Open full editor (Create a Brew)</button></div>` :
+          `<h2 class="sec">Want to tweak this one?</h2><div class="card"><p class="desc">This is a Recipe Library original. Duplicate it first (⧉ above) to get your own editable BrewGenge copy.</p></div>`}
+      </div>
       <div class="rm-footer">
-        <div class="toolbar">
-          <button class="btn alt" id="rmDupBtn">⧉ Duplicate</button>
-          <button class="btn alt" id="rmEditBtn">${custom?"✎ Edit ingredients":"✎ Duplicate & customise"}</button>
-          <button class="btn danger" id="rmDelBtn">🗑 ${custom?"Delete":"Hide"}</button>
-        </div>
-        <button class="btn" id="rmBrewBtn" style="font-size:1rem;padding:12px 22px;">🍺 Brew This</button>
+        <button class="btn big" id="rmBrewBtn">🍺 Brew This</button>
+        <button class="iconbtn" id="rmFavBtn" title="Favourite" style="width:40px;height:40px;font-size:1.1rem;">${isFav(r.id)?'★':'☆'}</button>
+        <span class="spacer"></span>
+        <button class="btn alt" id="rmCloseBtn2">Close</button>
       </div>
     </div>`;
-  bindRecipeModalEvents(m, r, id);
-  const bodyEl = m.querySelector(".rm-body");
-  if(bodyEl && restoreScroll) bodyEl.scrollTop = restoreScroll;
-}
-function bindRecipeModalEvents(m, r, id){
-  m.querySelector("#rmCloseBtn").onclick = closeRecipeModal;
-  m.querySelector("#rmNameInput").onchange = (e)=>{
-    const v = e.target.value.trim();
-    if(v && v!==r.name) renameRecipe(id, v);
-    refreshRecipeModal(id);
+
+  // ---- wire everything up ----
+  $("#rmCloseBtn").onclick = closeRecipeModal;
+  $("#rmCloseBtn2").onclick = closeRecipeModal;
+  $("#rmBrewBtn").onclick = ()=>{ STATE.selectedId=r.id; save(); closeRecipeModal(); PAGE="dashboard"; render(); };
+  $("#rmFavBtn").onclick = ()=>{ toggleFav(r.id); refreshRecipeModal(r.id); };
+
+  $("#rmNameInput").onchange = e=>{ renameRecipe(r.id, e.target.value); };
+  $("#rmThumbWrap").onclick = ()=> $("#rmImgFile").click();
+  $("#rmImgFile").onchange = e=> resizeImg(e.target.files[0], url=>{ setImage(r.id, url); refreshRecipeModal(r.id); });
+
+  document.querySelectorAll("[data-star]").forEach(b=>b.onclick=()=>{ setRating(r.id, +b.dataset.star); refreshRecipeModal(r.id); });
+
+  $("#rmBatch").onchange = e=>{ STATE.batchSize = parseFloat(e.target.value)||40; save(); refreshRecipeModal(r.id); };
+  $("#rmEq").onchange = e=>{ STATE.equipmentId = e.target.value; save(); refreshRecipeModal(r.id); };
+
+  document.querySelectorAll("[data-rmown]").forEach(cb=>cb.onchange=()=>{ togglePantry(r.id, cb.dataset.rmown, cb.checked); refreshRecipeModal(r.id); });
+
+  $("#rmAddSess").onclick = ()=>{
+    const og = parseFloat($("#rmSessOG").value) || null;
+    const fg = parseFloat($("#rmSessFG").value) || null;
+    const notes = $("#rmSessNotes").value.trim();
+    addSession(r.id, { og, fg, notes });
+    refreshRecipeModal(r.id);
   };
-  m.querySelector("#rmFavBtn").onclick = ()=>{ toggleFav(id); refreshRecipeModal(id); };
-  m.querySelectorAll("[data-star]").forEach(b=>b.onclick=()=>{ setRating(id, +b.dataset.star); refreshRecipeModal(id); });
-  m.querySelector("#rmThumbEdit").onclick = ()=> m.querySelector("#rmImgFile").click();
-  m.querySelector("#rmImgFile").onchange = (e)=>{
-    resizeImg(e.target.files[0], (url)=>{ setImage(id, url); refreshRecipeModal(id); });
-  };
-  m.querySelector("#rmExportBtn").onclick = ()=> exportSingle(r);
-  m.querySelector("#rmShareBtn").onclick = async ()=>{
-    const res = await shareRecipe(r);
-    if(res.ok){ showShareStatus(m, res.method==="share" ? "Shared!" : "Copied a text summary to your clipboard."); }
-    else if(res.method==="cancelled"){ /* user closed the native share sheet, do nothing */ }
-    else { showShareStatus(m, "Couldn't share or copy automatically, copy this manually:", res.text); }
-  };
-  m.querySelector("#rmBatch").onchange = (e)=>{
-    STATE.batchSize = parseFloat(e.target.value)||STATE.batchSize;
-    save();
-    refreshRecipeModal(id);
-  };
-  m.querySelectorAll("[data-rmown]").forEach(chk=>chk.onchange=()=>{
-    togglePantry(id, chk.dataset.rmown, chk.checked);
-    refreshRecipeModal(id);
-  });
-  m.querySelector("#rmAddSess").onclick = ()=>{
-    const date = m.querySelector("#rmSessDate").value || new Date().toISOString().slice(0,10);
-    const og = parseFloat(m.querySelector("#rmSessOG").value)||null;
-    const fg = parseFloat(m.querySelector("#rmSessFG").value)||null;
-    const notes = m.querySelector("#rmSessNotes").value||"";
-    addBrewSession(id, { date, batchSize: STATE.batchSize, actualOG: og, actualFG: fg, notes });
-    refreshRecipeModal(id);
-  };
-  m.querySelectorAll("[data-delsess]").forEach(b=>b.onclick=()=>{
-    deleteBrewSession(id, b.dataset.delsess);
-    refreshRecipeModal(id);
-  });
-  m.querySelector("#rmDupBtn").onclick = ()=>{
-    const copy = cloneRecipe(r);
-    const newId = saveRecipe(copy);
-    closeRecipeModal();
-    openRecipeModal(newId);
-  };
-  m.querySelector("#rmEditBtn").onclick = ()=>{
-    if(isCustom(id)) STATE.draftRecipe = JSON.parse(JSON.stringify(r));
-    else STATE.draftRecipe = cloneRecipe(r);
-    save();
-    closeRecipeModal();
-    PAGE="create"; render();
-  };
-  m.querySelector("#rmDelBtn").onclick = ()=>{
-    const cu = isCustom(id);
-    if(confirm(cu ? "Delete this BrewGenge recipe permanently?" : "Hide this library recipe from your list? You can restore it any time from the Recipe Library.")){
-      deleteRecipe(id);
-      closeRecipeModal();
-      render();
+  document.querySelectorAll("[data-delsess]").forEach(b=>b.onclick=()=>{ deleteSession(r.id, b.dataset.delsess); refreshRecipeModal(r.id); });
+
+  $("#rmDupBtn").onclick = ()=>{ const c2 = cloneRecipe(r); const newId = saveRecipe(c2); openRecipeModal(newId); };
+  $("#rmExportBtn").onclick = ()=> exportSingle(r);
+  $("#rmShareBtn").onclick = async ()=>{
+    const text = `${r.name}\n${r.style} · ${fmt(r.abv,1)}% ABV · ${fmt(r.ibu,0)} IBU\n${r.desc||""}\n\nMade with BrewGenge.`;
+    if(navigator.share){
+      try{ await navigator.share({ title:r.name, text }); }catch(e){ /* user cancelled, ignore */ }
+    } else if(navigator.clipboard){
+      await navigator.clipboard.writeText(text);
+      alert("Recipe summary copied to clipboard, paste it anywhere to share.");
+    } else {
+      alert(text);
     }
   };
-  m.querySelector("#rmBrewBtn").onclick = ()=>{
-    STATE.selectedId = id;
-    save();
-    closeRecipeModal();
-    PAGE="dashboard"; render();
+  $("#rmDelBtn").onclick = ()=>{
+    const msg = custom ? "Delete this BrewGenge recipe permanently?" : "Hide this library recipe? You can restore it any time from the Recipe Library.";
+    if(confirm(msg)){ deleteRecipe(r.id); closeRecipeModal(); }
   };
+  const editBtn = $("#rmEditBtn");
+  if(editBtn) editBtn.onclick = ()=>{ STATE.draftRecipe = JSON.parse(JSON.stringify(r)); save(); closeRecipeModal(); PAGE="create"; render(); };
+}
+function buildGuidelinePanel(r, g){
+  const rows = [
+    ["OG", r.og, g.og], ["FG", r.fg, g.fg], ["ABV %", r.abv, g.abv], ["IBU", r.ibu, g.ibu]
+  ];
+  return `<h2 class="sec">How this compares to style</h2>
+    <div class="card"><table class="gl-table"><thead><tr><th>Metric</th><th>This recipe</th><th>Typical range</th><th>In style?</th></tr></thead><tbody>
+      ${rows.map(([label, val, range])=>{
+        const inRange = val>=range[0] && val<=range[1];
+        return `<tr><td>${label}</td><td>${label==="OG"||label==="FG"?fmt(val,3):fmt(val,1)}</td><td>${label==="OG"||label==="FG"?fmt(range[0],3)+' – '+fmt(range[1],3):fmt(range[0],1)+' – '+fmt(range[1],1)}</td><td class="${inRange?'instyle':'outstyle'}">${inRange?'Yes':'Outside'}</td></tr>`;
+      }).join("")}
+    </tbody></table></div>`;
+}
+
+/* ============================================================
+   Image resize helper
+   ============================================================ */
+function resizeImg(file, cb){
+  if(!file) return;
+  const rd=new FileReader();
+  rd.onload=()=>{ const im=new Image(); im.onload=()=>{
+    let m=500,w=im.width,h=im.height;
+    if(w>h&&w>m){h*=m/w;w=m;} else if(h>m){w*=m/h;h=m;}
+    const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+    cv.getContext("2d").drawImage(im,0,0,w,h);
+    cb(cv.toDataURL("image/jpeg",0.84));
+  }; im.src=rd.result; };
+  rd.readAsDataURL(file);
 }
 
 /* ============================================================
@@ -1053,9 +1122,6 @@ function normalizeRecipe(raw){
       tempLo: raw.tempLo || 18, tempHi: raw.tempHi || 20,
       desc: raw.desc || raw.description || "",
       image: raw.image || null,
-      sourceNote: raw.sourceNote || null,
-      brewNotes: Array.isArray(raw.brewNotes) ? raw.brewNotes : null,
-      capacityWarning: raw.capacityWarning || null,
       ferm: (hasNativeFerm && raw.ferm.length) ? raw.ferm : [["Pale Ale Malt",8,4.85]],
       hops: (hasNativeHops && raw.hops.length) ? raw.hops : [["Cascade",20,7.5,"Boil",60]],
       water: Object.assign({}, FLORAVILLE_WATER)
@@ -1108,9 +1174,6 @@ function normalizeRecipe(raw){
       yeast: yeastName, yeastForm, atten, tempLo, tempHi,
       desc: raw.description || raw.desc || (Array.isArray(raw.brewDayNotes)?raw.brewDayNotes.join(" "):"") || "",
       image: raw.image || null,
-      sourceNote: raw.sourceNote || null,
-      brewNotes: Array.isArray(raw.brewNotes) ? raw.brewNotes : (Array.isArray(raw.brewDayNotes) ? raw.brewDayNotes : null),
-      capacityWarning: raw.capacityWarning || null,
       ferm: ferm.length ? ferm : [["Pale Ale Malt",8,4.85]],
       hops: hops.length ? hops : [["Cascade",20,7.5,"Boil",60]],
       water: Object.assign({}, FLORAVILLE_WATER)
@@ -1170,8 +1233,6 @@ function importJSON(e){
     list.forEach(raw=>{
       const norm = normalizeRecipe(raw);
       if(!norm){ fail++; return; }
-      if(!norm.sourceNote && o.sourceNote) norm.sourceNote = o.sourceNote;
-      if(!norm.capacityWarning && o.capacityWarning) norm.capacityWarning = o.capacityWarning;
       if(norm.image) anyImage=true;
       saveRecipe(norm);
       ok++;
@@ -1191,61 +1252,49 @@ function importJSON(e){
 }
 
 /* ============================================================
-   Image resize helper
+   Supabase cloud sync (optional, graceful, hardened auth flow)
    ============================================================ */
-function resizeImg(file, cb){
-  if(!file) return;
-  const rd=new FileReader();
-  rd.onload=()=>{ const im=new Image(); im.onload=()=>{
-    let m=500,w=im.width,h=im.height;
-    if(w>h&&w>m){h*=m/w;w=m;} else if(h>m){w*=m/h;h=m;}
-    const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
-    cv.getContext("2d").drawImage(im,0,0,w,h);
-    cb(cv.toDataURL("image/jpeg",0.84));
-  }; im.src=rd.result; };
-  rd.readAsDataURL(file);
-}
-
-/* ============================================================
-   Supabase cloud sync (optional, graceful)
-   ------------------------------------------------------------
-   The Supabase SDK is loaded dynamically here, not as a blocking
-   <script> tag in index.html. This means a slow, blocked or
-   unreachable CDN (corporate firewall, ad-blocker, offline, or
-   just a flaky connection) can NEVER hang the app itself, the
-   Dashboard and every tab render immediately regardless. Cloud
-   sync simply activates a little later once/if the SDK arrives,
-   or never activates at all if it can't, either way the rest of
-   BrewGenge is completely unaffected.
-   ============================================================ */
-function loadSupabaseScript(timeoutMs=6000){
-  return new Promise((resolve)=>{
-    if(typeof window.supabase !== "undefined"){ resolve(true); return; }
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-    let done = false;
-    const finish = (ok)=>{ if(done) return; done=true; resolve(ok); };
-    s.onload = ()=> finish(true);
-    s.onerror = ()=> finish(false);
-    document.head.appendChild(s);
-    setTimeout(()=> finish(typeof window.supabase !== "undefined"), timeoutMs);
-  });
-}
 async function initSupabase(){
   try{
-    const loaded = await loadSupabaseScript();
-    if(!loaded || typeof window.supabase === "undefined" || SB_URL.includes("YOUR-")) { updateSyncBadge(); return; }
+    if(typeof window.supabase === "undefined"){
+      AUTH_INIT_ERROR = "The Supabase library did not load from the CDN.";
+      updateSyncBadge();
+      return;
+    }
+    if(!SB_URL || SB_URL.includes("YOUR-")){
+      AUTH_INIT_ERROR = "Supabase URL is not configured.";
+      updateSyncBadge();
+      return;
+    }
     sb = window.supabase.createClient(SB_URL, SB_KEY);
-    const { data } = await sb.auth.getSession();
-    USER = data.session ? data.session.user : null;
+
+    // Surface any error Supabase attached to the redirect URL hash after a magic-link click
+    // (e.g. #error=access_denied&error_description=Email+link+is+invalid+or+has+expired)
+    const hashParams = new URLSearchParams((location.hash||"").replace(/^#/,""));
+    if(hashParams.get("error")){
+      AUTH_CALLBACK_ERROR = decodeURIComponent((hashParams.get("error_description")||hashParams.get("error")||"").replace(/\+/g," "));
+      history.replaceState(null, "", location.pathname + location.search); // clean the URL so a refresh doesn't reprocess it
+    }
+
+    const { data, error } = await sb.auth.getSession();
+    if(error){ console.warn("getSession error", error); }
+    USER = data && data.session ? data.session.user : null;
     if(USER) await cloudPull();
-    sb.auth.onAuthStateChange(async (_e, session)=>{
+
+    sb.auth.onAuthStateChange(async (event, session)=>{
       USER = session ? session.user : null;
+      if(event === "SIGNED_IN"){
+        AUTH_CALLBACK_ERROR = null;
+        history.replaceState(null, "", location.pathname + location.search); // strip #access_token=... from the URL bar
+      }
       if(USER) await cloudPull();
       updateSyncBadge();
       if(PAGE==="account") render();
     });
-  }catch(e){ console.warn("supabase init failed", e); }
+  }catch(e){
+    AUTH_INIT_ERROR = e.message || String(e);
+    console.warn("supabase init failed", e);
+  }
   updateSyncBadge();
 }
 function cloudPush(force){
@@ -1275,7 +1324,7 @@ async function cloudPull(){
 }
 function updateSyncBadge(){
   const el=$("#sync"); if(!el) return;
-  const map={ local:["","Local mode"], syncing:["online","Syncing..."], synced:["online","Synced · "+(USER?USER.email:"")], error:["","Sync error"] };
+  const map={ local:["","Local mode"], syncing:["online","Syncing..."], synced:["online","Synced · "+(USER?USER.email:"")], error:["error","Sync error"] };
   const [cls,txt]=USER?(map[syncStatus]||map.synced):map.local;
   el.className=cls; el.textContent=txt;
   const b=$("#syncStatusBadge"); if(b){ b.className=USER?"badge-ok":""; b.textContent=USER?("Signed in as "+USER.email):"Not signed in"; }

@@ -1,6 +1,8 @@
 -- ============================================================================
 -- BrewGenge cloud sync table. Run once in the Supabase SQL editor.
--- Safe to re-run. This is ALL the SQL required for the current app.
+-- Safe to re-run. This is ALL the SQL required for the current app,
+-- including sign-in/sync and recipe packs. Login problems are almost
+-- always a Dashboard configuration issue (see README), not a SQL issue.
 -- ============================================================================
 
 create table if not exists public.user_app_state (
