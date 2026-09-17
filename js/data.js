@@ -126,3 +126,43 @@ const SUPPLIERS = [
 const WATER_IONS = ["Ca","Mg","Na","SO4","Cl","Alk"];
 const WATER_LABELS = { Ca:"Calcium", Mg:"Magnesium", Na:"Sodium", SO4:"Sulphate", Cl:"Chloride", Alk:"Alkalinity" };
 const FLORAVILLE_WATER = { Ca:13.1, Mg:5.3, Na:28.0, SO4:32.5, Cl:38.0, Alk:24.0 };
+
+/* ============================================================
+   STYLE GUIDELINES (approximate typical ranges, not an official
+   BJCP reproduction, just a sanity-check guide for the Recipe
+   Detail popup). Matched by exact style name first, then by
+   keyword fallback for imported/custom recipes with a slightly
+   different style string.
+   ============================================================ */
+const STYLE_GUIDELINES = {
+  "West Coast IPA":              { og:[1.056,1.070], fg:[1.008,1.014], ibu:[50,70], abv:[5.5,7.5] },
+  "American / West Coast IPA":   { og:[1.056,1.075], fg:[1.008,1.016], ibu:[45,75], abv:[5.5,8.5] },
+  "Australian Extra Pale Ale":   { og:[1.038,1.050], fg:[1.006,1.012], ibu:[20,40], abv:[3.5,5.0] },
+  "Hazy / NEIPA":                { og:[1.060,1.070], fg:[1.010,1.015], ibu:[25,45], abv:[6.0,9.0] },
+  "Red / Amber IPA":             { og:[1.056,1.070], fg:[1.010,1.016], ibu:[40,70], abv:[5.5,7.5] },
+  "Australian Lager":            { og:[1.038,1.050], fg:[1.006,1.012], ibu:[8,20],  abv:[4.0,5.5] },
+  "Irish Stout":                 { og:[1.036,1.044], fg:[1.007,1.011], ibu:[25,45], abv:[4.0,4.5] },
+  "Belgian Witbier":             { og:[1.044,1.052], fg:[1.008,1.012], ibu:[10,20], abv:[4.5,5.5] },
+  "Double / Imperial NEIPA":     { og:[1.070,1.090], fg:[1.008,1.016], ibu:[40,70], abv:[7.5,10.5] },
+  "Session Pale Ale":            { og:[1.030,1.040], fg:[1.006,1.010], ibu:[20,35], abv:[3.0,4.1] },
+  "Oatmeal Stout":               { og:[1.045,1.065], fg:[1.010,1.018], ibu:[20,40], abv:[4.2,6.0] },
+  "Munich Helles":               { og:[1.044,1.050], fg:[1.008,1.012], ibu:[16,22], abv:[4.7,5.4] }
+};
+// Keyword fallback ladder, checked in order, first match wins.
+const STYLE_GUIDELINE_KEYWORDS = [
+  ["imperial",      "Double / Imperial NEIPA"],
+  ["dipa",          "Double / Imperial NEIPA"],
+  ["hazy",          "Hazy / NEIPA"],
+  ["neipa",         "Hazy / NEIPA"],
+  ["red",           "Red / Amber IPA"],
+  ["amber",         "Red / Amber IPA"],
+  ["west coast",    "West Coast IPA"],
+  ["ipa",           "West Coast IPA"],
+  ["session",       "Session Pale Ale"],
+  ["pale ale",      "Australian Extra Pale Ale"],
+  ["helles",        "Munich Helles"],
+  ["lager",         "Australian Lager"],
+  ["oatmeal",       "Oatmeal Stout"],
+  ["stout",         "Irish Stout"],
+  ["wit",           "Belgian Witbier"]
+];

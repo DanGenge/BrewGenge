@@ -80,27 +80,27 @@ tbody tr:hover{background:#fdf8f0;}
 tr.total td{font-weight:800;border-top:2px solid var(--ink);background:var(--amber-soft);}
 tr.owned{background:var(--green-soft);}
 .name{font-weight:800;}
-.sub{font-size:11px;color:var(--muted);white-space:nowrap;max-width:340px;overflow:hidden;text-overflow:ellipsis;}
+.sub{font-size:11px;color:var(--muted);white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis;}
 .pill{background:#eeeae5;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700;white-space:nowrap;}
 .strike{text-decoration:line-through;color:var(--muted);margin-right:6px;font-size:.85em;}
 
-/* ---- Recipe Library table: dedicated layout, this fixes the
-   clipped Export/Delete icon bug. The wrapper scrolls horizontally
-   (overflow-x:auto) rather than clipping content (overflow:hidden),
-   and the actions column has a guaranteed minimum width so all
-   five icons always fit and are always reachable. ---- */
+/* ---- Recipe Library: simple, uncluttered rows. Whole row opens the
+   recipe detail popup, only the favourite star and a quick-brew icon
+   sit inline. This also permanently avoids any icon-clipping issue
+   since there are only two small buttons per row now, not five. ---- */
 .lib-wrap{ overflow-x:auto; padding:0; }
-table.lib-table{ width:100%; min-width:920px; border-collapse:collapse; }
-table.lib-table .col-star{ width:34px; }
+table.lib-table{ width:100%; min-width:820px; border-collapse:collapse; }
+table.lib-table .col-star{ width:30px; }
+table.lib-table .col-brew{ width:34px; }
 table.lib-table .col-thumb{ width:56px; }
-table.lib-table .col-actions{ width:190px; white-space:nowrap; }
+table.lib-table .col-view{ width:26px; text-align:center; font-size:1.1rem; }
 table.lib-table td, table.lib-table th{ padding:9px 8px; }
 
 .star{border:0;background:none;font-size:20px;color:#c9c1b8;cursor:pointer;padding:2px;line-height:1;}
 .star:hover{color:var(--gold);transform:scale(1.12);}
 .star.on{color:var(--gold);}
 .row-lib{cursor:pointer;}
-.row-lib.sel{background:var(--amber-soft);box-shadow:inset 3px 0 0 var(--gold);}
+.row-lib:hover{background:#fdf8f0;}
 .actions{display:flex;gap:4px;justify-content:flex-end;flex-wrap:nowrap;}
 .iconbtn{width:28px;height:28px;flex-shrink:0;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;font-size:.8rem;}
 .iconbtn:hover{background:#f2efe9;}
@@ -127,6 +127,40 @@ ul.check li input{margin-right:10px;}
 .choice input{margin-right:8px;}
 .choice b{display:block;margin-bottom:3px;}
 
+/* ============ RECIPE DETAIL POPUP ============ */
+.recipe-modal-box{
+  width:min(780px,96vw); max-height:92vh; padding:0; display:flex; flex-direction:column;
+  overflow:hidden;
+}
+.rm-header{ display:flex; gap:16px; align-items:flex-start; padding:20px 22px 14px; border-bottom:1px solid var(--line); }
+.rm-thumb-wrap{ position:relative; flex-shrink:0; }
+.rm-thumb-wrap .thumb.big{ width:92px; height:92px; }
+.rm-thumb-edit{
+  position:absolute; bottom:-6px; right:-6px; width:30px; height:30px; border-radius:50%;
+  border:2px solid #fff; background:var(--gold); color:#fff; cursor:pointer; font-size:.85rem;
+}
+.rm-thumb-edit:hover{ background:#a8560c; }
+.rm-title{ flex:1; min-width:0; }
+.rm-name-input{
+  font:700 20px Georgia,serif; border:1.5px solid transparent; background:none; padding:4px 6px;
+  width:100%; border-radius:6px;
+}
+.rm-name-input:hover, .rm-name-input:focus{ border-color:var(--line); background:#fdfcfb; }
+.rm-meta{ display:flex; gap:8px; align-items:center; margin:4px 0 8px; flex-wrap:wrap; }
+.rm-stars{ display:flex; align-items:center; gap:2px; }
+.rm-star{ border:0; background:none; font-size:1.15rem; color:#d6cfc4; cursor:pointer; padding:1px; }
+.rm-star:hover{ color:#e5b355; }
+.rm-star.on{ color:var(--gold); }
+.rm-stars-label{ margin-left:8px; font-size:.75rem; }
+.rm-headicons{ display:flex; gap:6px; flex-shrink:0; }
+.rm-body{ overflow-y:auto; padding:0 22px 6px; flex:1; }
+.rm-footer{
+  border-top:1px solid var(--line); padding:14px 22px; display:flex; justify-content:space-between;
+  align-items:center; gap:12px; flex-wrap:wrap; background:#fdfcfb; flex-shrink:0;
+}
+.gl-table{ width:100%; border-collapse:collapse; }
+.gl-table td{ padding:8px 9px; border-bottom:1px solid #efeae4; }
+
 @media(max-width:900px){
   aside{transform:translateX(-100%);transition:transform .2s ease;box-shadow:2px 0 20px rgba(0,0,0,.25);}
   aside.open{transform:none;}
@@ -138,4 +172,7 @@ ul.check li input{margin-right:10px;}
   .fields,.packgrid{grid-template-columns:1fr;}
   .hero{grid-template-columns:70px 1fr;}
   .hero .heroActions{grid-column:1/-1;}
+  .rm-header{ flex-wrap:wrap; }
+  .rm-footer{ flex-direction:column; align-items:stretch; }
+  .rm-footer .toolbar{ justify-content:center; }
 }
