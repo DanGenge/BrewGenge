@@ -125,7 +125,6 @@ ul.check li input{margin-right:10px;}
 .choice input{margin-right:8px;}
 .choice b{display:block;margin-bottom:3px;}
 
-/* ---- Recipe Detail modal (Brewfather/Grainfather style popup) ---- */
 .recipe-modal-backdrop{position:fixed;inset:0;background:rgba(23,20,18,.6);z-index:150;display:flex;align-items:flex-start;justify-content:center;padding:26px 16px;overflow-y:auto;}
 .recipe-modal-box{width:min(760px,96vw);background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.4);overflow:hidden;display:flex;flex-direction:column;max-height:calc(100vh - 52px);}
 .rm-header{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);background:var(--paper);}

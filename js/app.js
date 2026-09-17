@@ -8,11 +8,11 @@ const SB_URL = "https://goojuftzuiwoptjtlwfx.supabase.co";
 const SB_KEY = "sb_publishable_WdvQhwumdXn5c35OdVZasA_sQWK0dM3";
 const STORE = "brewgenge_state_v1";
 const OTP_COOLDOWN_KEY = "brewgenge_otp_last_sent";
-const OTP_COOLDOWN_SECONDS = 60; // matches Supabase's default OTP resend rate limit
+const OTP_COOLDOWN_SECONDS = 60;
 
 let sb = null, USER = null, syncStatus = "local", syncTimer = null;
-let AUTH_INIT_ERROR = null;   // populated if the Supabase SDK never loaded etc.
-let AUTH_CALLBACK_ERROR = null; // populated if the magic-link redirect itself carried an error
+let AUTH_INIT_ERROR = null;
+let AUTH_CALLBACK_ERROR = null;
 
 /* ---------- State ---------- */
 function defaults(){
@@ -29,6 +29,8 @@ function defaults(){
     ratings: {},
     brewSessions: {},
     sourceWater: Object.assign({}, FLORAVILLE_WATER),
+    grainTempC: DEFAULT_GRAIN_TEMP_C,
+    spargeTempC: DEFAULT_SPARGE_TEMP_C,
     efficiency: 0.75,
     fermLog: [],
     draftRecipe: null,
@@ -36,6 +38,7 @@ function defaults(){
   };
 }
 let STATE = load();
+repairWaterlessCustomRecipes(STATE);
 function load(){
   try{
     const raw = localStorage.getItem(STORE);
@@ -54,6 +57,26 @@ function merge(base, over){
   return over !== undefined ? over : base;
 }
 function save(){ localStorage.setItem(STORE, JSON.stringify(STATE)); cloudPush(); }
+
+// One-time repair: any custom recipe whose water target is an EXACT copy of the
+// Floraville source water (the signature of the old bug, before style-aware defaults
+// existed) gets repaired to a proper style-aware target. Never touches a genuinely
+// custom water profile someone deliberately set.
+function waterMatchesFloraville(w){
+  if(!w) return false;
+  return WATER_IONS.every(ion => Math.abs((w[ion]||0) - (FLORAVILLE_WATER[ion]||0)) < 0.01);
+}
+function repairWaterlessCustomRecipes(state){
+  if(!state || !Array.isArray(state.myRecipes)) return;
+  let fixed = 0;
+  state.myRecipes.forEach(r=>{
+    if(waterMatchesFloraville(r.water)){ r.water = defaultWaterForStyle(r.style); fixed++; }
+  });
+  if(fixed>0){
+    localStorage.setItem(STORE, JSON.stringify(state));
+    console.info("BrewGenge: repaired water target on "+fixed+" recipe(s) that had no real style profile set.");
+  }
+}
 
 /* ---------- Helpers ---------- */
 const $ = s => document.querySelector(s);
@@ -90,7 +113,7 @@ function toggleFav(id){
 function getRating(id){ return (STATE.ratings||{})[id] || 0; }
 function setRating(id, n){
   if(!STATE.ratings) STATE.ratings = {};
-  STATE.ratings[id] = (STATE.ratings[id] === n) ? 0 : n; // clicking the same star again clears it
+  STATE.ratings[id] = (STATE.ratings[id] === n) ? 0 : n;
   save();
 }
 function ensureLabel(r){
@@ -104,6 +127,9 @@ function ensureLabel(r){
 function saveRecipe(r){
   if(!r.id) r.id = uid("brew");
   ensureLabel(r);
+  if(!r.water || typeof r.water !== "object" || WATER_IONS.some(ion => r.water[ion]==null)){
+    r.water = defaultWaterForStyle(r.style);
+  }
   r.updatedAt = new Date().toISOString();
   if(!r.createdAt) r.createdAt = r.updatedAt;
   const i = (STATE.myRecipes||[]).findIndex(x=>x.id===r.id);
@@ -158,7 +184,7 @@ function togglePantry(recipeId, name, on){
   STATE.pantry[recipeId][name] = on; save();
 }
 
-/* ---------- Brew sessions (per-recipe brew history log) ---------- */
+/* ---------- Brew sessions ---------- */
 function getSessions(id){ return (STATE.brewSessions||{})[id] || []; }
 function addSession(id, entry){
   if(!STATE.brewSessions) STATE.brewSessions = {};
@@ -174,18 +200,17 @@ function deleteSession(id, sessId){
   }
 }
 
-/* ---------- Style guideline lookup + rough colour estimate ---------- */
+/* ---------- Style guideline + colour estimate ---------- */
 function findStyleGuideline(styleName){
   const key = (styleName||"").trim().toLowerCase();
   return STYLE_GUIDELINES[key] || null;
 }
 function estimateColorEBC(r){
-  // Very rough visual estimate only, weights typical colour contribution per malt type by name keyword.
   const total = (r.ferm||[]).reduce((s,f)=>s+f[1],0) || 1;
   let ebc = 0;
   (r.ferm||[]).forEach(f=>{
     const n = f[0].toLowerCase();
-    let malColor = 6; // base pale malt default EBC
+    let malColor = 6;
     if(/pilsner/.test(n)) malColor = 4;
     else if(/vienna/.test(n)) malColor = 8;
     else if(/munich/.test(n)) malColor = 18;
@@ -196,7 +221,7 @@ function estimateColorEBC(r){
     else if(/carapils|dextrine/.test(n)) malColor = 4;
     ebc += (f[1]/total) * malColor;
   });
-  ebc = Math.max(3, ebc * (total/8)); // scale factor so a "normal" 8kg grist reads sensibly
+  ebc = Math.max(3, ebc * (total/8));
   ebc = Math.min(ebc, 900);
   const hexMap = [[6,"#f6e29a"],[10,"#f0cf6a"],[16,"#e6b13e"],[26,"#d68e2e"],[40,"#b8621e"],[70,"#8a3f18"],[130,"#5a2712"],[300,"#301209"],[900,"#0d0605"]];
   let hex = "#5a2712";
@@ -238,20 +263,19 @@ function calc(r){
   const spargeWater = Math.max(0, preboil - strike + grainAbsorptionL);
   const totalWater = strike + spargeWater;
   const salts = computeSaltAdditions(r.water || FLORAVILLE_WATER, STATE.sourceWater, totalWater);
+
+  const mashTemp = r.mashTemp!=null ? r.mashTemp : DEFAULT_MASH_TEMP_C;
+  const grainTemp = STATE.grainTempC!=null ? STATE.grainTempC : DEFAULT_GRAIN_TEMP_C;
+  const strikeTemp = mashTemp + (0.4 / eq.mashThickness) * (mashTemp - grainTemp);
+  const mashVolume = strike + totalGrain * GRAIN_DISPLACEMENT_L_PER_KG;
+  const spargeTemp = STATE.spargeTempC!=null ? STATE.spargeTempC : DEFAULT_SPARGE_TEMP_C;
+
   return { sf, eq, ferm, hops, totalGrain, totalHops, ibu, og, fermCost, hopCost, yeastCost, full, toBuy, saving, preboil, strike,
-    grainAbsorptionL, spargeWater, totalWater, salts,
+    grainAbsorptionL, spargeWater, totalWater, salts, mashTemp, grainTemp, strikeTemp, mashVolume, spargeTemp,
     grainOK: totalGrain <= eq.maxGrain, boilOK: preboil <= eq.maxKettle };
 }
 
-/* ---------- Salt/acid addition calculator ----------
-   Heuristic (the same approach most brewing water calculators use):
-   gypsum bridges the sulphate gap, calcium chloride bridges the chloride
-   gap, epsom salt bridges any remaining magnesium gap, baking soda raises
-   alkalinity if needed, and diluted lactic acid is suggested if the source
-   water's alkalinity is already higher than the style needs. Calcium ends
-   up as a side effect of the sulphate/chloride salts rather than solved
-   for directly, which is standard practice, the sulphate:chloride balance
-   matters far more to flavour than hitting an exact calcium number. ---- */
+/* ---------- Salt/acid addition calculator ---------- */
 function computeSaltAdditions(target, source, totalLiquorL){
   const V = totalLiquorL > 0 ? totalLiquorL : 1;
   const deltaSO4 = Math.max(0, (target.SO4||0) - (source.SO4||0));
@@ -262,10 +286,8 @@ function computeSaltAdditions(target, source, totalLiquorL){
 
   const gypsum_g = (deltaSO4 * V) / SALT_PPM_PER_GRAM.gypsum.SO4;
   const cacl2_g = (deltaCl * V) / SALT_PPM_PER_GRAM.cacl2.Cl;
-  // epsom only tops up whatever magnesium gap is left, sulphate it also contributes is a bonus not double counted against the gypsum target
   const epsom_g = (deltaMg * V) / SALT_PPM_PER_GRAM.epsom.Mg;
   const bakingsoda_g = (deltaAlkUp * V) / SALT_PPM_PER_GRAM.bakingsoda.Alk;
-  // 88% lactic acid, mL needed to knock the given ppm of CaCO3-equivalent alkalinity out of V litres
   const lacticAcid_mL = deltaAlkDown>0 ? (deltaAlkDown * V / 50000 * 90.08/(1.206*0.88)) : 0;
 
   const resulting = {
@@ -508,8 +530,8 @@ function equipment(){
 /* ---------- Create a Brew ---------- */
 function blankRecipe(){
   return { id:null, name:"", style:"", baseBatch:STATE.batchSize||40, og:1.050, fg:1.010, abv:5.0, ibu:30,
-    yeast:"US-05", yeastForm:"Dry", atten:0.78, tempLo:18, tempHi:20, desc:"", custom:true, image:null,
-    ferm:[["Pale Ale Malt",8.0,4.85]], hops:[["Cascade",20,7.5,"Boil",60]], water:Object.assign({},FLORAVILLE_WATER) };
+    yeast:"US-05", yeastForm:"Dry", atten:0.78, tempLo:18, tempHi:20, mashTemp:DEFAULT_MASH_TEMP_C, desc:"", custom:true, image:null,
+    ferm:[["Pale Ale Malt",8.0,4.85]], hops:[["Cascade",20,7.5,"Boil",60]], water:defaultWaterForStyle("") };
 }
 function create(){
   if(!STATE.draftRecipe) STATE.draftRecipe = blankRecipe();
@@ -517,7 +539,7 @@ function create(){
   $("#app").innerHTML = `
     <div class="card">
       <h3>Create a BrewGenge Original</h3>
-      <p class="desc">Fill in your grain and hops at the base batch size, the app scales from there. It saves to My Recipes and auto-labels as BrewGenge.</p>
+      <p class="desc">Fill in your grain and hops at the base batch size, the app scales from there. It saves to My Recipes and auto-labels as BrewGenge, and gets a style-appropriate water target automatically.</p>
       <div class="fields">
         <div class="field"><label>Name</label><input id="dn" value="${esc(d.name)}" placeholder="Newy Lager"></div>
         <div class="field"><label>Style</label><input id="ds" value="${esc(d.style)}" placeholder="Australian Lager"></div>
@@ -640,16 +662,38 @@ function water(){
   $("#app").innerHTML = `
     <div class="card"><p>Recipe: <span class="calc">${esc(r.name)}</span> Batch: <span class="calc">${fmt(STATE.batchSize,1)} L</span> Equipment: <span class="calc">${esc(c.eq.name)}</span></p></div>
 
-    <h2 class="sec">Mash and sparge water</h2>
+    <h2 class="sec">Mash setup</h2>
+    <div class="card">
+      <div class="fields">
+        <div class="field"><label>Target mash temp (°C)</label><input type="number" step="0.5" id="wMashTemp" value="${fmt(c.mashTemp,1)}"></div>
+        <div class="field"><label>Grain temperature (°C)</label><input type="number" step="0.5" id="wGrainTemp" value="${fmt(c.grainTemp,1)}"></div>
+        <div class="field"><label>Mash thickness</label><span class="calc">${c.eq.mashThickness} L/kg (${esc(c.eq.name)})</span></div>
+      </div>
+    </div>
     <div class="card stats">
+      ${stat("Strike water temp", fmt(c.strikeTemp,1)+" °C")}
+      ${stat("Strike water volume", fmt(c.strike,1)+" L")}
+      ${stat("Mash tun volume", fmt(c.mashVolume,1)+" L")}
       ${stat("Total grain", fmt(c.totalGrain,2)+" kg")}
-      ${stat("Strike water (mash-in)", fmt(c.strike,1)+" L")}
       ${stat("Grain absorption", fmt(c.grainAbsorptionL,1)+" L")}
-      ${stat("Sparge water", fmt(c.spargeWater,1)+" L")}
-      ${stat("Total water needed", fmt(c.totalWater,1)+" L")}
     </div>
     <div class="card">
-      <p class="muted">Strike water = total grain &times; mash thickness (${c.eq.mashThickness} L/kg for ${esc(c.eq.name)}). Sparge water tops the kettle up to its pre-boil volume (${fmt(c.preboil,1)} L), after allowing for water the grain itself soaks up (${GRAIN_ABSORPTION_L_PER_KG} L/kg). Heat strike water a few degrees above your target mash temperature since dough-in cools it down, and treat all of it for chlorine/chloramine with Campden before use.</p>
+      <p class="muted">Strike temperature is calculated from the classic heat-balance formula (grain's specific heat &asymp; 0.4 &times; water's), so dough-in lands right on your target mash temp instead of guessing and overshooting. Mash tun volume adds the grain's own displaced volume (~0.67 L/kg) on top of the strike water, useful for checking headspace in your mash tun or basket. Confirm your actual dough-in temperature with a thermometer, insulation and ambient conditions shift the real number slightly.</p>
+    </div>
+
+    <h2 class="sec">Sparge setup</h2>
+    <div class="card">
+      <div class="fields">
+        <div class="field"><label>Sparge water temp (°C)</label><input type="number" step="0.5" id="wSpargeTemp" value="${fmt(c.spargeTemp,1)}"></div>
+      </div>
+    </div>
+    <div class="card stats">
+      ${stat("Sparge water volume", fmt(c.spargeWater,1)+" L")}
+      ${stat("Total water needed", fmt(c.totalWater,1)+" L")}
+      ${stat("Pre-boil volume", fmt(c.preboil,1)+" L")}
+    </div>
+    <div class="card">
+      <p class="muted">Sparge water tops the kettle up to its pre-boil volume (${fmt(c.preboil,1)} L), after allowing for water the grain itself soaks up (${GRAIN_ABSORPTION_L_PER_KG} L/kg). ${fmt(DEFAULT_SPARGE_TEMP_C,0)}&deg;C is the usual sweet spot, hot enough to keep runnings flowing freely, cool enough to avoid stewing tannins out of the grain husks. Treat all mash and sparge water for chlorine/chloramine with Campden before use.</p>
     </div>
 
     <h2 class="sec">Source water (edit if you have a test result)</h2>
@@ -666,7 +710,7 @@ function water(){
       }).join("")}
     </tbody></table></div>
 
-    <h2 class="sec">Suggested salt additions (across ${fmt(c.totalWater,1)} L total liquor)</h2>
+    <h2 class="sec">Chemical (salt) additions, across ${fmt(c.totalWater,1)} L total liquor</h2>
     <div class="card">
       <table><thead><tr><th>Addition</th><th>Amount</th><th>Why</th></tr></thead><tbody>
         <tr><td>${SALT_PPM_PER_GRAM.gypsum.name}</td><td><b>${fmt(s.gypsum_g,1)} g</b></td><td class="muted">Boosts sulphate for a crisper, drier hop character</td></tr>
@@ -675,8 +719,11 @@ function water(){
         <tr><td>${SALT_PPM_PER_GRAM.bakingsoda.name}</td><td><b>${fmt(s.bakingsoda_g,1)} g</b></td><td class="muted">Raises alkalinity, only needed for darker/roastier styles</td></tr>
         <tr><td>88% Lactic acid</td><td><b>${fmt(s.lacticAcid_mL,2)} mL</b></td><td class="muted">${s.lacticAcid_mL>0 ? "Knocks down excess alkalinity so the mash can reach the right pH" : "Not needed, source alkalinity is already at or below target"}</td></tr>
       </tbody></table>
-      <div class="note">These are calculated automatically from the gap between your source water and this recipe's target profile, they recalculate whenever you change recipe, batch size or the source water figures above. Treat this as a starting point, not gospel, always measure actual mash pH 10 to 15 minutes after dough-in with a calibrated pH meter (aiming for roughly 5.2 to 5.6) and adjust from there.</div>
+      <div class="note">These are calculated automatically from the gap between your source water and this recipe's target profile, they recalculate whenever you change recipe, batch size, mash/sparge settings, or the source water figures above. Treat this as a starting point, not gospel, always measure actual mash pH 10 to 15 minutes after dough-in with a calibrated pH meter (aiming for roughly 5.2 to 5.6) and adjust from there.</div>
     </div>`;
+  $("#wMashTemp").onchange = e=>{ r.mashTemp = parseFloat(e.target.value); if(isNaN(r.mashTemp)) r.mashTemp = DEFAULT_MASH_TEMP_C; if(isCustom(r.id)) save(); render(); };
+  $("#wGrainTemp").onchange = e=>{ STATE.grainTempC = parseFloat(e.target.value); if(isNaN(STATE.grainTempC)) STATE.grainTempC = DEFAULT_GRAIN_TEMP_C; save(); render(); };
+  $("#wSpargeTemp").onchange = e=>{ STATE.spargeTempC = parseFloat(e.target.value); if(isNaN(STATE.spargeTempC)) STATE.spargeTempC = DEFAULT_SPARGE_TEMP_C; save(); render(); };
   document.querySelectorAll("[data-w]").forEach(inp=>inp.onchange=()=>{STATE.sourceWater[inp.dataset.w]=+inp.value||0;save();render();});
 }
 
@@ -797,7 +844,7 @@ function account(){
       <p>Status: <span id="syncStatusBadge" class="${USER?'badge-ok':''}">${USER?'Signed in as '+esc(USER.email):'Not signed in'}</span></p>
     </div>
 
-    ${AUTH_INIT_ERROR ? `<div class="card"><p class="warn"><b>Supabase didn't load:</b> ${esc(AUTH_INIT_ERROR)}</p><p class="muted">This usually means the browser blocked the Supabase script (an ad-blocker, privacy extension, or corporate network filter), or you're offline. Local mode still works fully, try again on a different network or with extensions disabled.</p></div>` : ""}
+    ${AUTH_INIT_ERROR ? `<div class="card"><p class="warn"><b>Supabase didn't load:</b> ${esc(AUTH_INIT_ERROR)}</p><p class="muted">This usually means the browser blocked the Supabase script (an ad-blocker, privacy extension, or corporate network filter), you're offline, or the Supabase project itself is paused/unreachable. Free-tier Supabase projects pause automatically after a week of inactivity, log into supabase.com and check for a "Restore project" button. Local mode still works fully either way.</p></div>` : ""}
 
     ${AUTH_CALLBACK_ERROR ? `<div class="card"><p class="warn"><b>The magic link didn't work:</b> ${esc(AUTH_CALLBACK_ERROR)}</p><p class="muted">${authErrorAdvice(AUTH_CALLBACK_ERROR)}</p></div>` : ""}
 
@@ -809,12 +856,18 @@ function account(){
           <div id="msg" style="margin-top:10px;"></div>
         </div>`}
 
-    <div class="card"><h3>Troubleshooting a magic link that isn't arriving</h3>
-      <p class="desc">This app can't verify Supabase's email delivery for you, since that happens entirely on Supabase's side once the request is sent. If the button says it sent successfully but no email shows up, check these, in order:</p>
+    <div class="card"><h3>Troubleshooting: "Load failed" or nothing sends</h3>
+      <p class="desc">If clicking "Send magic link" immediately shows a red error like "Load failed" or "Failed to fetch" (rather than a delayed rate-limit message), the request never even reached Supabase. This is different from a delivery problem, check these first:</p>
       <ol style="margin:8px 0 0; padding-left:20px; font-size:.86rem; color:var(--muted); line-height:1.7;">
-        <li><b>Spam / Junk folder</b> first, always. Supabase's default sending address gets filtered by some providers.</li>
-        <li><b>Redirect URL allow-list</b> in your Supabase project: <span class="pill">Authentication → URL Configuration</span>. The exact page URL below must be added there, or Supabase will reject the sign-in silently or bounce you to an error page after clicking the link.</li>
-        <li><b>Rate limits</b>: Supabase's free tier only allows a new OTP email roughly once every 60 seconds per address, and a small number of emails per hour project-wide. If you've tested a few times quickly, wait a few minutes.</li>
+        <li><b>Is the Supabase project paused?</b> The most common cause. Free projects pause automatically after about a week of no activity. Log into supabase.com, open this project, and look for a "Restore project" button. Wait a couple of minutes after restoring before trying again.</li>
+        <li><b>Project URL and API key still match.</b> In Supabase, Settings &rarr; API, confirm the Project URL and publishable key haven't been regenerated or copied from a different project.</li>
+        <li><b>Try a different network.</b> Some corporate/school Wi-Fi networks block third-party API domains outright. Try mobile data with Wi-Fi off.</li>
+      </ol>
+      <p class="desc" style="margin-top:14px;">Once the request is actually reaching Supabase but the email itself never arrives, then it's a delivery/redirect issue:</p>
+      <ol style="margin:8px 0 0; padding-left:20px; font-size:.86rem; color:var(--muted); line-height:1.7;">
+        <li><b>Spam / Junk folder</b> first, always.</li>
+        <li><b>Redirect URL allow-list</b>: Authentication &rarr; URL Configuration. The exact page URL below must be added there.</li>
+        <li><b>Rate limits</b>: Supabase's free tier only allows a new OTP email roughly once every 60 seconds per address, and a small number of emails per hour project-wide.</li>
         <li><b>Site URL</b> in the same settings screen should also be set to your GitHub Pages URL, not left as the Supabase default localhost address.</li>
       </ol>
       <p class="muted" style="margin-top:10px;">Current page URL, copy this exactly into the Redirect URLs allow-list:</p>
@@ -854,7 +907,7 @@ function account(){
           startCooldownCountdown();
         }
       }catch(e){
-        msgEl.innerHTML = `<span class="warn">Network error contacting Supabase: ${esc(e.message)}. Check your internet connection and try again.</span>`;
+        msgEl.innerHTML = `<span class="warn">Network error contacting Supabase: ${esc(e.message)}. This usually means the Supabase project is paused or unreachable, check the troubleshooting card below.</span>`;
         $("#signin").disabled = false;
       }
     };
@@ -885,14 +938,17 @@ function readme(){
     <div class="card"><h3>How to use BrewGenge</h3><ol>
       <li>Pick a recipe and batch size on the Dashboard, everything scales automatically.</li>
       <li>Choose your gear under Equipment, capacity checks follow it.</li>
-      <li>Click 🔍 on any recipe for the full detail popup, image, style check, live shopping list, rating and brew history.</li>
+      <li>Click 🔍 on any recipe for the full detail popup: image, style check, live shopping list, rating and brew history.</li>
       <li>Tick "Already have?" on Fermentables/Hops (or inside the popup) to drop pantry items from the Cost.</li>
       <li>Brew Day and Fermentation are your live log.</li>
     </ol></div>
+    <div class="card"><h3>Water and salt additions</h3>
+      <p>The Water tab calculates strike water volume and temperature, mash tun volume, sparge water volume and total water needed, in litres, not just ion targets. It then suggests exact grams of Gypsum, Calcium Chloride, Epsom Salt, Baking Soda and 88% Lactic Acid based on the gap between your source water and this recipe's target profile, recalculated live whenever you change recipe, batch size, mash/sparge settings, or the source water figures. Custom and imported recipes automatically get a sensible style-appropriate water target (an IPA gets a sulphate-forward profile, a stout gets higher alkalinity, etc.) rather than defaulting to a copy of the source water.</p>
+    </div>
     <div class="card"><h3>Sharing recipe packs</h3>
       <p>Recipe Library → Export Recipe Pack. Choose all recipes, favourites, or BrewGenge originals. Uploaded images are embedded as Base64 inside the JSON and import with the recipe. Single recipes can be exported with the ⬇ icon on each row.</p>
       <p>Importing understands both BrewGenge's own format AND common "verbose" recipe JSON (fermentables/hops as named objects, e.g. from an AI chat search). If a file genuinely doesn't contain readable ingredients, you'll get a clear error instead of a blank recipe.</p>
-      <div class="note"><b>No additional SQL is required for recipe packs or for signing in.</b> They work entirely in the browser (packs) or against the single existing sync table (sign-in). A future "BrewGenge Community" feature, live recipe sharing between different accounts, discovery, following other brewers, would need a new Supabase migration since it requires proper cross-account ownership and visibility rules. Simple export/import already covers "share with a mate" without needing that.</div>
+      <div class="note"><b>No additional SQL is required for recipe packs.</b> They work entirely in the browser. A future BrewGenge Community feature (sharing between accounts) would need a new Supabase migration.</div>
     </div>
     <div class="card"><h3>Custom logo and recipe photos</h3>
       <p>The BrewGenge crest and every recipe icon are built-in vector art, so nothing is ever a broken image. To use your own logo: add a file to <code>img/logo.jpeg</code> (or <code>.jpg</code> / <code>.png</code>) in your repo, lowercase filename exactly. GitHub Pages is case-sensitive, so <code>Logo.JPEG</code> will NOT match <code>logo.jpeg</code>.</p>
@@ -905,7 +961,7 @@ function readme(){
 }
 
 /* ============================================================
-   Recipe Detail Modal (Brewfather / Grainfather style popup)
+   Recipe Detail Modal
    ============================================================ */
 function openRecipeModal(id){
   STATE.selectedId = id; save();
@@ -1021,7 +1077,6 @@ function refreshRecipeModal(id){
       </div>
     </div>`;
 
-  // ---- wire everything up ----
   $("#rmCloseBtn").onclick = closeRecipeModal;
   $("#rmCloseBtn2").onclick = closeRecipeModal;
   $("#rmBrewBtn").onclick = ()=>{ STATE.selectedId=r.id; save(); closeRecipeModal(); PAGE="dashboard"; render(); };
@@ -1106,6 +1161,22 @@ function extractRecipeList(o){
   if(o && typeof o === "object" && (o.ferm || o.fermentables)) return [o];
   return null;
 }
+function normalizeWaterObject(w){
+  if(!w || typeof w !== "object") return null;
+  const pick = (...keys) => { for(const k of keys){ if(w[k]!=null && !isNaN(w[k])) return +w[k]; } return null; };
+  const out = {
+    Ca: pick("Ca","calcium","Calcium"),
+    Mg: pick("Mg","magnesium","Magnesium"),
+    Na: pick("Na","sodium","Sodium"),
+    SO4: pick("SO4","sulfate","sulphate","Sulfate","Sulphate"),
+    Cl: pick("Cl","chloride","Chloride"),
+    Alk: pick("Alk","alkalinity","Alkalinity")
+  };
+  const hasAny = Object.values(out).some(v => v!=null);
+  if(!hasAny) return null;
+  WATER_IONS.forEach(ion => { if(out[ion]==null) out[ion] = FLORAVILLE_WATER[ion]; });
+  return out;
+}
 function normalizeRecipe(raw){
   if(!raw || typeof raw !== "object") return null;
 
@@ -1124,7 +1195,7 @@ function normalizeRecipe(raw){
       image: raw.image || null,
       ferm: (hasNativeFerm && raw.ferm.length) ? raw.ferm : [["Pale Ale Malt",8,4.85]],
       hops: (hasNativeHops && raw.hops.length) ? raw.hops : [["Cascade",20,7.5,"Boil",60]],
-      water: Object.assign({}, FLORAVILLE_WATER)
+      water: (raw.water && typeof raw.water==="object") ? Object.assign({}, raw.water) : defaultWaterForStyle(raw.style)
     };
   }
 
@@ -1176,7 +1247,7 @@ function normalizeRecipe(raw){
       image: raw.image || null,
       ferm: ferm.length ? ferm : [["Pale Ale Malt",8,4.85]],
       hops: hops.length ? hops : [["Cascade",20,7.5,"Boil",60]],
-      water: Object.assign({}, FLORAVILLE_WATER)
+      water: normalizeWaterObject(raw.water) || defaultWaterForStyle(raw.style)
     };
   }
 
@@ -1268,12 +1339,10 @@ async function initSupabase(){
     }
     sb = window.supabase.createClient(SB_URL, SB_KEY);
 
-    // Surface any error Supabase attached to the redirect URL hash after a magic-link click
-    // (e.g. #error=access_denied&error_description=Email+link+is+invalid+or+has+expired)
     const hashParams = new URLSearchParams((location.hash||"").replace(/^#/,""));
     if(hashParams.get("error")){
       AUTH_CALLBACK_ERROR = decodeURIComponent((hashParams.get("error_description")||hashParams.get("error")||"").replace(/\+/g," "));
-      history.replaceState(null, "", location.pathname + location.search); // clean the URL so a refresh doesn't reprocess it
+      history.replaceState(null, "", location.pathname + location.search);
     }
 
     const { data, error } = await sb.auth.getSession();
@@ -1285,7 +1354,7 @@ async function initSupabase(){
       USER = session ? session.user : null;
       if(event === "SIGNED_IN"){
         AUTH_CALLBACK_ERROR = null;
-        history.replaceState(null, "", location.pathname + location.search); // strip #access_token=... from the URL bar
+        history.replaceState(null, "", location.pathname + location.search);
       }
       if(USER) await cloudPull();
       updateSyncBadge();
@@ -1314,6 +1383,7 @@ async function cloudPull(){
     if(error){ syncStatus="error"; return; }
     if(data && data.state && Object.keys(data.state).length){
       STATE = merge(defaults(), data.state);
+      repairWaterlessCustomRecipes(STATE);
       localStorage.setItem(STORE, JSON.stringify(STATE));
     } else {
       await sb.from("user_app_state").upsert({ user_id:USER.id, state:STATE }, { onConflict:"user_id" });
@@ -1331,7 +1401,7 @@ function updateSyncBadge(){
 }
 
 /* ============================================================
-   Logo / crest loading (tries jpeg -> jpg -> png -> drawn SVG fallback)
+   Logo / crest loading
    ============================================================ */
 function setupCrest(){
   const el = document.getElementById("crest");

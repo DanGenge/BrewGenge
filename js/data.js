@@ -63,13 +63,13 @@ const RECIPES = [
     water:{Ca:90,Mg:8,Na:20,SO4:70,Cl:150,Alk:40} },
   { id:"r4", name:"American Red IPA", style:"Red / Amber IPA", baseBatch:40,
     og:1.066, fg:1.012, abv:7.0, ibu:65, yeast:"WLP001 / US-05", yeastForm:"Dry", atten:0.80,
-    tempLo:18, tempHi:20, mashTemp:67, desc:"Caramel malt backbone with a big Chinook, Centennial and Simcoe hop charge.",
+    tempLo:18, tempHi:20, mashTemp:66, desc:"Caramel malt backbone with a big Chinook, Centennial and Simcoe hop charge.",
     ferm:[["Pale Ale Malt",9.5,4.85],["Munich Dark",0.8,5.45],["Medium Crystal",0.5,5.25],["Carafa Special II",0.15,6.85]],
     hops:[["Chinook",30,13,"Boil",60],["Centennial",20,10,"Boil",15],["Simcoe",20,13,"Boil",15],["Chinook",40,13,"Whirlpool",20],["Centennial",40,10,"Whirlpool",20],["Simcoe",40,13,"Whirlpool",20],["Chinook",40,13,"Dry Hop",0],["Centennial",40,10,"Dry Hop",0]],
     water:{Ca:120,Mg:12,Na:20,SO4:250,Cl:80,Alk:50} },
   { id:"r5", name:"Aussie Classic Lager", style:"Australian Lager", baseBatch:40,
     og:1.045, fg:1.008, abv:4.6, ibu:18, yeast:"SafLager S-23 / W34/70", yeastForm:"Dry", atten:0.78,
-    tempLo:12, tempHi:14, mashTemp:64, desc:"Crisp, clean and easy drinking, Pride of Ringwood keeps it authentically Australian.",
+    tempLo:12, tempHi:14, mashTemp:65, desc:"Crisp, clean and easy drinking, Pride of Ringwood keeps it authentically Australian.",
     ferm:[["Pilsner Malt (Au)",8.0,4.65],["Flaked Rice",0.8,9.95],["Carapils / Dextrine",0.2,6.65]],
     hops:[["Pride of Ringwood",20,9,"Boil",60],["Pride of Ringwood",10,9,"Boil",15]],
     water:{Ca:50,Mg:8,Na:10,SO4:50,Cl:50,Alk:30} },
@@ -81,25 +81,25 @@ const RECIPES = [
     water:{Ca:100,Mg:10,Na:25,SO4:55,Cl:100,Alk:150} },
   { id:"r7", name:"Belgian Wit", style:"Belgian Witbier", baseBatch:40,
     og:1.048, fg:1.010, abv:5.0, ibu:15, yeast:"T-58 / WLP400", yeastForm:"Dry", atten:0.75,
-    tempLo:19, tempHi:22, desc:"Soft, spicy and refreshing with raw wheat, coriander and orange peel.",
+    tempLo:19, tempHi:22, mashTemp:66, desc:"Soft, spicy and refreshing with raw wheat, coriander and orange peel.",
     ferm:[["Pilsner Malt",5.0,4.65],["Raw Wheat",3.0,4.95],["Rolled Oats",0.4,5.55]],
     hops:[["Saaz",20,4,"Boil",60],["Coriander Seed",20,0,"Boil",10],["Orange Peel",20,0,"Boil",10]],
     water:{Ca:60,Mg:8,Na:15,SO4:60,Cl:80,Alk:50} },
   { id:"r8", name:"Hunter Hazy DIPA", style:"Double / Imperial NEIPA", baseBatch:40,
     og:1.075, fg:1.014, abv:8.0, ibu:45, yeast:"London Ale III / Verdant", yeastForm:"Liquid", atten:0.72,
-    tempLo:19, tempHi:21, desc:"Big, juicy and soft, Citra, Mosaic and Nelson Sauvin stacked hard.",
+    tempLo:19, tempHi:21, mashTemp:67, desc:"Big, juicy and soft, Citra, Mosaic and Nelson Sauvin stacked hard.",
     ferm:[["Pale Ale Malt",9.0,4.85],["Flaked Oats",1.5,5.55],["Wheat Malt",1.2,5.25],["Carapils / Dextrine",0.3,6.65]],
     hops:[["Magnum",20,12,"Boil",60],["Citra",60,12,"Whirlpool",20],["Mosaic",60,12,"Whirlpool",20],["Nelson Sauvin",40,12,"Whirlpool",20],["Citra",80,12,"Dry Hop",0],["Mosaic",80,12,"Dry Hop",0],["Nelson Sauvin",40,12,"Dry Hop",0]],
     water:{Ca:90,Mg:8,Na:20,SO4:60,Cl:180,Alk:40} },
   { id:"r9", name:"Session Pale Ale", style:"Session Pale Ale", baseBatch:40,
     og:1.038, fg:1.008, abv:3.8, ibu:25, yeast:"US-05", yeastForm:"Dry", atten:0.80,
-    tempLo:18, tempHi:19, desc:"Low ABV, full flavour, Galaxy and Cascade for citrus and passionfruit.",
+    tempLo:18, tempHi:19, mashTemp:66, desc:"Low ABV, full flavour, Galaxy and Cascade for citrus and passionfruit.",
     ferm:[["Pale Ale Malt",6.5,4.85],["Wheat Malt",0.3,5.25],["Carapils / Dextrine",0.2,6.65]],
     hops:[["Galaxy",15,14,"Boil",60],["Cascade",20,7.5,"Whirlpool",20],["Galaxy",20,14,"Whirlpool",20],["Cascade",30,7.5,"Dry Hop",0],["Galaxy",30,14,"Dry Hop",0]],
     water:{Ca:90,Mg:10,Na:15,SO4:140,Cl:60,Alk:35} },
   { id:"r10", name:"Oatmeal Stout", style:"Oatmeal Stout", baseBatch:40,
     og:1.055, fg:1.014, abv:5.4, ibu:32, yeast:"Nottingham / WLP002", yeastForm:"Dry", atten:0.70,
-    tempLo:18, tempHi:20, desc:"Rich, smooth and slightly sweet with oats, chocolate and roast barley.",
+    tempLo:18, tempHi:20, mashTemp:67, desc:"Rich, smooth and slightly sweet with oats, chocolate and roast barley.",
     ferm:[["Pale Ale Malt",7.5,4.85],["Flaked Oats",1.0,5.55],["Chocolate Malt",0.5,6.45],["Medium Crystal",0.5,5.25],["Roast Barley",0.2,5.25]],
     hops:[["East Kent Goldings",35,5.5,"Boil",60],["Fuggles",15,4.5,"Boil",15]],
     water:{Ca:110,Mg:12,Na:25,SO4:60,Cl:110,Alk:150} }
@@ -124,10 +124,12 @@ const WATER_IONS = ["Ca","Mg","Na","SO4","Cl","Alk"];
 const WATER_LABELS = { Ca:"Calcium", Mg:"Magnesium", Na:"Sodium", SO4:"Sulphate", Cl:"Chloride", Alk:"Alkalinity" };
 const FLORAVILLE_WATER = { Ca:13.1, Mg:5.3, Na:28.0, SO4:32.5, Cl:38.0, Alk:24.0 };
 
-/* ---- Brewing salts: ppm contribution per gram dissolved, per litre of the batch liquor.
-   i.e. adding X grams to a liquor volume of V litres raises that ion by (X * factor / V) ppm.
-   Standard values used across most homebrew water calculators (Bru'n Water, Brewer's Friend etc). ---- */
-const GRAIN_ABSORPTION_L_PER_KG = 0.8; // typical water retained by crushed grain in the mash
+const GRAIN_ABSORPTION_L_PER_KG = 0.8;
+const GRAIN_DISPLACEMENT_L_PER_KG = 0.67;
+const DEFAULT_MASH_TEMP_C = 66;
+const DEFAULT_GRAIN_TEMP_C = 20;
+const DEFAULT_SPARGE_TEMP_C = 76;
+
 const SALT_PPM_PER_GRAM = {
   gypsum:     { name:"Gypsum (CaSO4·2H2O)",          Ca:61.5, SO4:147.4 },
   cacl2:      { name:"Calcium Chloride (CaCl2·2H2O)", Ca:72.0, Cl:127.0 },
@@ -135,7 +137,6 @@ const SALT_PPM_PER_GRAM = {
   bakingsoda: { name:"Baking Soda (NaHCO3)",          Na:27.4, Alk:59.5 }
 };
 
-/* ---- Rough style guideline ranges for the "how does this compare" panel ---- */
 const STYLE_GUIDELINES = {
   "west coast ipa": { og:[1.056,1.070], fg:[1.008,1.014], abv:[5.5,7.5], ibu:[50,70], ebc:[10,28] },
   "american ipa": { og:[1.056,1.070], fg:[1.008,1.014], abv:[5.5,7.5], ibu:[40,70], ebc:[10,28] },
@@ -149,3 +150,22 @@ const STYLE_GUIDELINES = {
   "belgian witbier": { og:[1.044,1.052], fg:[1.008,1.012], abv:[4.5,5.5], ibu:[10,20], ebc:[6,10] },
   "oatmeal stout": { og:[1.048,1.065], fg:[1.010,1.018], abv:[4.2,5.9], ibu:[25,40], ebc:[65,150] }
 };
+
+/* ---- Style-aware default water targets (used when a custom/imported recipe has no
+   water profile of its own, so the salt calculator has something meaningful to compare
+   against rather than silently defaulting to a copy of the source water). ---- */
+const STYLE_WATER_DEFAULTS = [
+  { test:/hazy|neipa|new england/i,           water:{Ca:90,  Mg:8,  Na:20, SO4:70,  Cl:150, Alk:40}  },
+  { test:/west coast|american ipa|\bipa\b/i,   water:{Ca:110, Mg:12, Na:20, SO4:220, Cl:75,  Alk:40}  },
+  { test:/red|amber/i,                          water:{Ca:120, Mg:12, Na:20, SO4:250, Cl:80,  Alk:50}  },
+  { test:/pale ale|xpa|extra pale/i,            water:{Ca:90,  Mg:10, Na:15, SO4:150, Cl:60,  Alk:35}  },
+  { test:/session/i,                            water:{Ca:90,  Mg:10, Na:15, SO4:140, Cl:60,  Alk:35}  },
+  { test:/lager|pilsner|helles/i,               water:{Ca:60,  Mg:8,  Na:12, SO4:55,  Cl:75,  Alk:40}  },
+  { test:/stout|porter|dark/i,                   water:{Ca:110, Mg:12, Na:25, SO4:60,  Cl:110, Alk:150} },
+  { test:/wit|wheat|weiss/i,                     water:{Ca:60,  Mg:8,  Na:15, SO4:60,  Cl:80,  Alk:50}  }
+];
+function defaultWaterForStyle(style){
+  const s = style || "";
+  const match = STYLE_WATER_DEFAULTS.find(x => x.test.test(s));
+  return Object.assign({}, match ? match.water : {Ca:90, Mg:10, Na:15, SO4:120, Cl:70, Alk:40});
+}
