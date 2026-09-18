@@ -140,7 +140,6 @@ table.gl-table td{padding:5px 6px;}
 table.gl-table td.instyle{color:var(--green);font-weight:800;}
 table.gl-table td.outstyle{color:var(--red);font-weight:800;}
 .rm-shoprow.owned{background:var(--green-soft);}
-tr.owned td{color:var(--ink);}
 .rm-footer{display:flex;gap:8px;flex-wrap:wrap;padding:14px 18px;border-top:1px solid var(--line);background:var(--paper);}
 .rm-footer .spacer{flex:1;}
 .authtabs{display:flex;gap:6px;background:var(--calc-bg);padding:4px;border-radius:10px;margin-bottom:18px;}
@@ -172,9 +171,7 @@ tr.owned td{color:var(--ink);}
 }
 
 
-/* ============================================================
-   Theme toggle button
-   ============================================================ */
+/* ============================================================ Theme toggle ============================================================ */
 #themeToggle{
   background:var(--card); border:1.5px solid var(--line); color:var(--ink);
   border-radius:999px; width:34px; height:34px; flex-shrink:0;
@@ -185,23 +182,19 @@ tr.owned td{color:var(--ink);}
 #themeToggle:hover{ background:var(--calc-bg); border-color:var(--gold); }
 
 /* ============================================================
-   Big BrewGenge crest behind the app content
-   Sits fixed behind everything, never intercepts clicks.
+   Big BrewGenge crest behind the app content.
+   Fixed, behind everything, never intercepts clicks.
    ============================================================ */
 #appWatermark{
-  position:fixed;
-  right:-6vmin; bottom:-10vmin;
+  position:fixed; right:-6vmin; bottom:-10vmin;
   width:min(62vmin,620px); height:min(62vmin,620px);
   opacity:var(--watermark-opacity);
-  pointer-events:none; user-select:none;
-  z-index:0;
+  pointer-events:none; user-select:none; z-index:0;
 }
 #appWatermark img, #appWatermark svg{ width:100%; height:100%; object-fit:contain; display:block; }
 main{ position:relative; z-index:1; }
 
-/* ============================================================
-   Login gate: huge logo background behind the card
-   ============================================================ */
+/* ============================================================ Login gate with huge crest ============================================================ */
 .bg-gate{
   position:fixed; inset:0; z-index:500;
   background:radial-gradient(circle at 50% 42%, #2a211c 0%, #171412 62%, #0f0d0b 100%);
@@ -209,13 +202,10 @@ main{ position:relative; z-index:1; }
   padding:22px; overflow-y:auto;
 }
 .bg-gate-bg{
-  position:absolute;
-  top:50%; left:50%; transform:translate(-50%,-50%);
+  position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
   width:min(118vmin,1100px); height:min(118vmin,1100px);
-  opacity:.17;
-  pointer-events:none; user-select:none;
-  filter:drop-shadow(0 0 60px rgba(243,180,77,.25));
-  z-index:0;
+  opacity:.17; pointer-events:none; user-select:none;
+  filter:drop-shadow(0 0 60px rgba(243,180,77,.25)); z-index:0;
 }
 .bg-gate-bg img, .bg-gate-bg svg{ width:100%; height:100%; object-fit:contain; display:block; }
 .bg-gate-card{
@@ -233,10 +223,18 @@ main{ position:relative; z-index:1; }
   display:block; width:100%; margin-top:14px;
   background:none; border:0; cursor:pointer;
   color:var(--muted); font-size:.8rem; font-weight:600;
-  text-decoration:underline; text-underline-offset:3px;
-  padding:6px;
+  text-decoration:underline; text-underline-offset:3px; padding:6px;
 }
 .bg-gate-offline:hover{ color:var(--gold2); }
+
+/* ============================================================ Share BrewGenge ============================================================ */
+.share-preview{
+  background:var(--calc-bg); border:1px solid var(--line); border-radius:var(--radius-sm);
+  padding:16px 18px; margin:0;
+  font:400 .84rem/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color:var(--ink); white-space:pre-wrap; word-break:break-word;
+  max-height:340px; overflow:auto;
+}
 
 @media(max-width:900px){
   #appWatermark{ width:min(72vmin,420px); height:min(72vmin,420px); right:-14vmin; bottom:-14vmin; }

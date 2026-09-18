@@ -4,41 +4,54 @@ A static brew calculator with Supabase cloud sync. Built around the Guten 50L.
 
 ## Signing in
 
-Email + password. That's it.
+A sign-in screen appears the moment you open BrewGenge.
 
-1. Enter your email and password
-2. Tick **Stay signed in**
-3. Tap **Login**
+**First time?** Tap **Create account**, enter an email and a password (6+ characters), confirm it, and you're straight in. No email is sent, nothing to click, nothing to wait for.
 
-The session is restored automatically every time you open BrewGenge on that device, and your brews sync to the cloud on their own. Nothing is emailed, so nothing expires and nothing can be pre-clicked by a corporate mail scanner.
+**After that** just **Sign in** on any other device with the same details.
 
-There is **no signup screen**. Accounts are created directly in Supabase.
+Tick **Stay signed in on this device** (on by default) and the session restores automatically every time you open BrewGenge there, with your brews syncing on their own.
 
-### Creating a user
-
-Supabase dashboard → **Authentication → Users → Add user**:
-- Email + password
-- Tick **Auto Confirm User**
-
-That's the whole process. Repeat for anyone else who needs access — each account's brews stay completely private to that account.
+There's also **Continue offline** if you'd rather not have an account at all — the whole app works, just saved in that browser only.
 
 ### Supabase settings
 
 **No SQL change.** `supabase/001_user_app_state.sql` is unchanged from every previous version. If you've run it before, don't run it again.
 
-Authentication → **Sign In / Providers** → **Email**: provider **enabled**. Since accounts are made by hand with Auto Confirm ticked, the "Confirm email" toggle no longer matters either way.
+Authentication → **Sign In / Providers** → **Email**:
+- Email provider: **enabled**
+- **"Confirm email": OFF**
 
-No SMTP. No email templates. No confirmation emails.
+That second one matters. If it's left ON, Supabase emails a confirmation *link* when you create an account and you're back in link-hell. With it off, Create account signs you straight in. BrewGenge detects this case and tells you exactly which toggle to flip rather than appearing to hang.
+
+No SMTP. No email templates.
 
 > **No password reset.** Nothing is emailed, so there's no reset flow. If you forget a password, change it in Supabase → Authentication → Users → (user) → reset password. Your brews stay attached to the account.
 
+## Share BrewGenge
+
+The **Share BrewGenge** tab writes an invite for you. Enter their name, their email, and your name, and it composes the whole message with the link in it.
+
+**Why it opens your email app instead of sending directly:** BrewGenge is a static site with no server behind it, so it physically cannot send email itself. Instead the invite opens in whatever mail app you already use, pre-addressed and pre-written, ready to hit send. That's actually better — it arrives from your real address, so it won't get spam-filtered the way a no-reply from an unfamiliar domain would.
+
+Three ways to send:
+- **Open in my email app** — pre-fills a new email, you just hit send
+- **Copy invite** — full message on the clipboard, paste anywhere (text, WhatsApp, wherever)
+- **Copy link only** — just the URL
+
+On phones there's also a **Share…** button that uses the native share sheet.
+
+A live preview shows exactly what they'll receive, updating as you type. Everyone you share with gets logged to a **Shared with** list so you can keep track, and that list syncs across your devices like everything else.
+
+Whoever you send it to can use the entire app without an account. If you want their recipes synced too, add them under Supabase → Authentication → Users and give them the login.
+
 ## Dark mode
 
-Toggle in the top-right of the header — **☽ moon** switches to dark, **☀ sun** switches back. Your choice is remembered on that device and survives page reloads.
+Toggle in the top-right of the header — **☽ moon** switches to dark, **☀ sun** switches back. Remembered on that device and survives reloads.
 
 ## Logo
 
-`img/logo.png` is the BrewGenge crest, shown large behind the login screen and as a subtle watermark behind the app. Its background has been made transparent so it sits correctly on both light and dark themes.
+`img/logo.png` is the BrewGenge crest, shown large behind the login screen and as a subtle watermark behind the app. Its background has been made transparent so it sits correctly on both themes.
 
 To swap it, replace `img/logo.png` (or add `img/logo.jpeg` / `img/logo.jpg`). Lowercase filenames — GitHub Pages is case-sensitive. A transparent PNG works best. If no file is found, a built-in drawn crest is used instead.
 
@@ -50,19 +63,20 @@ To swap it, replace `img/logo.png` (or add `img/logo.jpeg` / `img/logo.jpg`). Lo
 
 ## Sync is merge-based, not overwrite-based
 
-Every sync fetches the cloud copy first, merges by recipe ID (keeping whichever version was edited most recently), and unions favourites, pantry ticks, ratings and brew history from both sides before writing back. An empty device can never wipe a populated cloud library.
+Every sync fetches the cloud copy first, merges by recipe ID (keeping whichever version was edited most recently), and unions favourites, pantry ticks, ratings, brew history and your share list from both sides before writing back. An empty device can never wipe a populated cloud library.
 
-## Sharing recipes (no account needed)
+## Sharing recipes (different to sharing the app)
 
-Recipe Library → **Export Recipe Pack** (all / favourites / mine), or the ⬇ icon on any recipe. Images are embedded as Base64 inside the JSON. **Import JSON** understands both BrewGenge's own format and common verbose recipe JSON.
+Recipe Library → **Export Recipe Pack** (all / favourites / mine), or the ⬇ icon on any recipe. Images are embedded as Base64 inside the JSON. **Import JSON** understands both BrewGenge's own format and common verbose recipe JSON. No account needed.
 
 ## Features
 
-Dashboard · Recipe Library · Recipe Detail popup (image, style comparison, live shopping list, star rating, brew history) · Equipment profiles · Create a Brew · Find a Brew · Fermentables · Hops (Tinseth IBU) · Water (mash/sparge temps + volumes, automatic salt calculator) · Brew Day · Fermentation log · Cost · Find Ingredients · Find a Supplier · Account & Sync · Read Me.
+Dashboard · Recipe Library · Recipe Detail popup (image, style comparison, live shopping list, star rating, brew history) · Equipment profiles · Create a Brew · Find a Brew · Fermentables · Hops (Tinseth IBU) · Water (mash/sparge temps + volumes, automatic salt calculator) · Brew Day · Fermentation log · Cost · Find Ingredients · Find a Supplier · Share BrewGenge · Account & Sync · Read Me.
 
 ## Changelog
 
-- **Login only.** Removed the signup screen, the Create Account tab, confirmation-email handling and all the auth explainer clutter. Just email, password, stay signed in, Login. Sign out lives under Account & Sync.
+- **Share BrewGenge tab.** Name + email + your name, writes the invite, opens it in your email app ready to send. Copy invite / copy link / native share sheet as alternatives. Live preview and a synced "Shared with" history.
+- **Sign in / Create account tabs** on the login screen that appears when the page loads, with Stay signed in ticked by default. Create your own account in the app, no Supabase dashboard trip needed. Clear errors for wrong password, already-registered, signups-disabled, and the "Confirm email is still ON" case.
 - **Dark mode toggle** in the header, persisted per device, applied across every tab, table, modal and the login screen.
 - **Big BrewGenge crest** behind the login screen, plus a subtle watermark behind the app. Logo background made transparent so it works on light and dark.
 - Safe merge sync, water/salt calculator, recipe detail popup — all unchanged.

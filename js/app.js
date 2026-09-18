@@ -6,8 +6,8 @@
    No signup screen, no magic links, no emailed codes, no
    confirmation email. Users are created directly in
    Supabase -> Authentication -> Users. Sign in once per device,
-   the session is restored automatically on every later visit,
-   and brews sync to the cloud automatically.
+   the session restores automatically on later visits, and brews
+   sync to the cloud automatically.
    ============================================================ */
 
 const SB_URL = "https://goojuftzuiwoptjtlwfx.supabase.co";
@@ -17,6 +17,9 @@ const STAY_SIGNED_IN_KEY = "brewgenge_stay_signed_in";
 const OFFLINE_MODE_KEY = "brewgenge_offline_mode";
 const LAST_EMAIL_KEY = "brewgenge_last_email";
 const THEME_KEY = "brewgenge_theme";
+const APP_URL = "https://dangenge.github.io/BrewGenge/";
+
+let authMode = "signin"; // "signin" | "signup"
 
 let sb = null, USER = null, syncStatus = "local", syncTimer = null;
 let AUTH_INIT_ERROR = null;
@@ -29,7 +32,7 @@ function defaults(){
     favourites: [], myRecipes: [], myEquipment: [], overrides: {}, hidden: [], pantry: {},
     ratings: {}, brewSessions: {}, sourceWater: Object.assign({}, FLORAVILLE_WATER),
     grainTempC: DEFAULT_GRAIN_TEMP_C, spargeTempC: DEFAULT_SPARGE_TEMP_C, efficiency: 0.75,
-    fermLog: [], draftRecipe: null, draftEquipment: null, lastActivityAt: null
+    fermLog: [], shareLog: [], draftRecipe: null, draftEquipment: null, lastActivityAt: null
   };
 }
 let STATE = load();
@@ -241,6 +244,7 @@ const TABS = [
   { id:"cost", label:"Cost", icon:"＄", group:"SHOP" },
   { id:"finding", label:"Find Ingredients", icon:"🛒", group:"SHOP" },
   { id:"supplier", label:"Find a Supplier", icon:"🚚", group:"SHOP" },
+  { id:"share", label:"Share BrewGenge", icon:"📨", group:"SETTINGS" },
   { id:"account", label:"Account & Sync", icon:"☁", group:"SETTINGS" },
   { id:"readme", label:"Read Me", icon:"📖", group:"SETTINGS" }
 ];
@@ -258,7 +262,7 @@ function render(){
   $("#title").textContent = tab.label;
   ({dashboard:dash,library:library,equipment:equipment,create:create,findbrew:findbrew,
     fermentables:fermentables,hops:hopsTab,water:water,brewday:brewday,fermentation:fermentation,
-    cost:cost,finding:finding,supplier:supplier,account:account,readme:readme}[PAGE])();
+    cost:cost,finding:finding,supplier:supplier,share:share,account:account,readme:readme}[PAGE])();
   updateSyncBadge();
   applyTheme(currentTheme());
   renderGate();
@@ -744,60 +748,98 @@ function account(){
   }
 }
 
-// Shared login form, used by both the Account tab and the login gate.
-// prefix avoids duplicate element ids when both exist.
+// Shared auth form, used by both the Account tab and the login gate.
+// prefix avoids duplicate element ids when both exist on the page.
 function buildAuthFormHTML(stay, prefix){
   const lastEmail = localStorage.getItem(LAST_EMAIL_KEY) || "";
+  const isSignup = authMode === "signup";
   return `<div class="card">
+    <div class="authtabs">
+      <button class="authtab ${!isSignup?'on':''}" id="${prefix}TabIn" type="button">Sign in</button>
+      <button class="authtab ${isSignup?'on':''}" id="${prefix}TabUp" type="button">Create account</button>
+    </div>
     <div class="field"><label>Email</label><input id="${prefix}Email" type="email" placeholder="you@example.com" autocomplete="email" value="${esc(lastEmail)}"></div>
-    <div class="field" style="margin-top:12px;"><label>Password</label><input id="${prefix}Pass" type="password" placeholder="Your password" autocomplete="current-password"></div>
-    <label class="toggle" style="margin:14px 0 12px; display:flex; align-items:center; gap:8px;"><input type="checkbox" id="${prefix}Stay" ${stay?"checked":""}> Stay signed in</label>
-    <button class="btn big" id="${prefix}Go">Login</button>
+    <div class="field" style="margin-top:12px;"><label>Password</label><input id="${prefix}Pass" type="password" placeholder="${isSignup?'At least 6 characters':'Your password'}" autocomplete="${isSignup?'new-password':'current-password'}"></div>
+    ${isSignup ? `<div class="field" style="margin-top:12px;"><label>Confirm password</label><input id="${prefix}Pass2" type="password" placeholder="Type it again" autocomplete="new-password"></div>` : ``}
+    <label class="toggle" style="margin:14px 0 12px; display:flex; align-items:center; gap:8px;"><input type="checkbox" id="${prefix}Stay" ${stay?"checked":""}> Stay signed in on this device</label>
+    <button class="btn big" id="${prefix}Go">${isSignup?'Create account':'Login'}</button>
     <div id="${prefix}Msg" style="margin-top:10px;"></div>
+    ${isSignup?`<p class="muted" style="margin-top:12px;line-height:1.5;">Creating an account backs your brews up to the cloud so they follow you between your phone and computer. Nothing is emailed to you.</p>`:``}
   </div>`;
 }
 function wireAuthForm(prefix){
+  const setMode = (m)=>{ authMode = m; if(prefix==="acct") render(); else renderGate(true); };
+  const tIn = $("#"+prefix+"TabIn"); if(tIn) tIn.onclick = ()=> setMode("signin");
+  const tUp = $("#"+prefix+"TabUp"); if(tUp) tUp.onclick = ()=> setMode("signup");
   const stayInput = $("#"+prefix+"Stay");
   if(stayInput) stayInput.onchange = e=>localStorage.setItem(STAY_SIGNED_IN_KEY, e.target.checked?"1":"0");
   const goBtn = $("#"+prefix+"Go"); if(goBtn) goBtn.onclick = ()=> doAuth(prefix);
   const passEl = $("#"+prefix+"Pass"); if(passEl) passEl.addEventListener("keydown", e=>{ if(e.key==="Enter") doAuth(prefix); });
+  const pass2El = $("#"+prefix+"Pass2"); if(pass2El) pass2El.addEventListener("keydown", e=>{ if(e.key==="Enter") doAuth(prefix); });
   const emailEl = $("#"+prefix+"Email"); if(emailEl) emailEl.addEventListener("keydown", e=>{ if(e.key==="Enter" && passEl) passEl.focus(); });
 }
 async function doAuth(prefix){
   const msgEl = $("#"+prefix+"Msg");
   const email = ($("#"+prefix+"Email").value||"").trim();
   const pass = ($("#"+prefix+"Pass").value||"");
+  const isSignup = authMode === "signup";
+
   if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ msgEl.innerHTML = `<span class="warn">Enter a valid email address.</span>`; return; }
   if(!pass){ msgEl.innerHTML = `<span class="warn">Enter your password.</span>`; return; }
+  if(isSignup){
+    if(pass.length < 6){ msgEl.innerHTML = `<span class="warn">Password must be at least 6 characters.</span>`; return; }
+    const p2El = $("#"+prefix+"Pass2");
+    const pass2 = p2El ? (p2El.value||"") : "";
+    if(pass !== pass2){ msgEl.innerHTML = `<span class="warn">Those two passwords don't match.</span>`; return; }
+  }
   if(!sb){ msgEl.innerHTML = `<span class="warn">Still connecting. If this persists the Supabase project may be paused.</span>`; return; }
 
   const goBtn = $("#"+prefix+"Go");
-  msgEl.innerHTML = `<span class="muted">Signing in...</span>`;
+  msgEl.innerHTML = `<span class="muted">${isSignup?'Creating your account...':'Signing in...'}</span>`;
   if(goBtn) goBtn.disabled = true;
   try{
-    const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+    const result = isSignup
+      ? await sb.auth.signUp({ email, password: pass })
+      : await sb.auth.signInWithPassword({ email, password: pass });
+    const { data, error } = result;
+
     if(error){
-      msgEl.innerHTML = `<span class="warn">${esc(friendlyAuthError(error.message))}</span>`;
+      msgEl.innerHTML = `<span class="warn">${esc(friendlyAuthError(error.message, isSignup))}</span>`;
       if(goBtn) goBtn.disabled = false;
       return;
     }
+
+    // If "Confirm email" is still switched on in Supabase, signUp returns a user
+    // but NO session, because it is waiting on an emailed confirmation link.
+    // Say so plainly rather than appearing to hang.
+    if(isSignup && data && data.user && !data.session){
+      msgEl.innerHTML = `<span class="warn">Account made, but Supabase is set to require email confirmation, so it has emailed you a link. Either click that link, or (better) turn <b>OFF</b> "Confirm email" under Authentication &rarr; Sign In / Providers &rarr; Email in your Supabase dashboard, then create the account again.</span>`;
+      if(goBtn) goBtn.disabled = false;
+      return;
+    }
+
     USER = (data && data.user) ? data.user : (data && data.session ? data.session.user : USER);
     localStorage.setItem(LAST_EMAIL_KEY, email);
     localStorage.removeItem(OFFLINE_MODE_KEY);
+    authMode = "signin";
     await cloudPull();
-    updateSyncBadge();
-    renderGate();
+    updateSyncBadge(); renderGate();
     if(PAGE==="account") render();
   }catch(e){
     msgEl.innerHTML = `<span class="warn">Network error: ${esc(e.message)}. The Supabase project may be paused or unreachable.</span>`;
     if(goBtn) goBtn.disabled = false;
   }
 }
-function friendlyAuthError(msg){
+function friendlyAuthError(msg, isSignup){
   const m = (msg||"").toLowerCase();
-  if(/invalid login credentials/.test(m)) return "Wrong email or password.";
+  if(/invalid login credentials/.test(m)) return isSignup
+    ? msg
+    : "Wrong email or password. If you haven't made an account yet, tap Create account.";
+  if(/user already registered|already been registered/.test(m)) return "There's already an account with that email. Tap Sign in instead.";
+  if(/password should be at least/.test(m)) return "Password is too short, use at least 6 characters.";
+  if(/signups not allowed|signup is disabled/.test(m)) return "Sign-ups are disabled on this Supabase project. Enable them under Authentication \u2192 Sign In / Providers \u2192 Email.";
   if(/email logins are disabled/.test(m)) return "Email sign-in is disabled on this Supabase project.";
-  if(/email not confirmed/.test(m)) return "This account is not confirmed yet. Confirm it under Supabase \u2192 Authentication \u2192 Users.";
+  if(/email not confirmed/.test(m)) return "This account is not confirmed yet. Either click the link Supabase emailed you, or confirm it under Supabase \u2192 Authentication \u2192 Users.";
   if(/rate|too many/.test(m)) return "Too many attempts, wait a minute and try again.";
   return msg;
 }
@@ -815,6 +857,167 @@ function applyTheme(t){
 }
 function toggleTheme(){ applyTheme(currentTheme() === "dark" ? "light" : "dark"); }
 
+/* ============================================================
+   Share BrewGenge
+   ------------------------------------------------------------
+   BrewGenge is a static site with no server, so it cannot send
+   email itself. Instead this composes the invite and hands it to
+   whatever the user already has: their own mail app (mailto),
+   the phone's native share sheet, or the clipboard. Sending from
+   the user's own address is also far more likely to land in the
+   inbox than a no-reply from an unknown domain.
+   ============================================================ */
+function shareAppUrl(){
+  // Prefer the real deployed URL, but fall back to wherever this copy is running.
+  try{
+    const here = location.origin + location.pathname;
+    if(/^https?:/i.test(here) && !/^file:/i.test(here) && location.hostname && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") return here;
+  }catch(e){}
+  return APP_URL;
+}
+function buildInvite(name, fromName){
+  const url = shareAppUrl();
+  const hi = name ? `Hi ${name},` : `Hi,`;
+  const sign = fromName ? `\n\nCheers,\n${fromName}` : `\n\nCheers`;
+  const subject = `BrewGenge \u2013 your brewing calculator`;
+  const body =
+`${hi}
+
+Thought you'd get some use out of BrewGenge, a brewing calculator I've been using.
+
+${url}
+
+It works straight in the browser, no install needed. It scales any recipe to your batch size and gear, works out your strike and sparge water, salt additions in grams, hop schedule and IBU, plus what the ingredients will cost and which supplier is cheapest.
+
+You can use it without an account. If you want your recipes synced across your phone and computer, let me know and I'll set you up with a login.${sign}`;
+  return { subject, body, url };
+}
+function getShareLog(){ return (STATE.shareLog||[]).slice().reverse(); }
+function logShare(name, email, method){
+  if(!STATE.shareLog) STATE.shareLog = [];
+  STATE.shareLog.push({ id: uid("shr"), name: name||"", email: email||"", method: method||"", date: new Date().toISOString() });
+  save();
+}
+function deleteShare(id){
+  STATE.shareLog = (STATE.shareLog||[]).filter(s=>s.id!==id);
+  save();
+}
+function share(){
+  const url = shareAppUrl();
+  const sent = getShareLog();
+  const canNativeShare = !!navigator.share;
+  $("#app").innerHTML = `
+    <div class="card">
+      <h3>Share BrewGenge</h3>
+      <p class="desc">Enter who you're sending it to and BrewGenge will write the invite for you. Because this is a static site with no server behind it, the invite opens in <b>your own email app</b> ready to send, rather than being sent by BrewGenge. That also means it arrives from your address, so it won't get filtered as spam.</p>
+      <div class="fields" style="margin-top:16px;">
+        <div class="field"><label>Their name</label><input id="shName" type="text" placeholder="Bloggsy" autocomplete="off"></div>
+        <div class="field"><label>Their email</label><input id="shEmail" type="email" placeholder="mate@example.com" autocomplete="off"></div>
+        <div class="field"><label>From (your name)</label><input id="shFrom" type="text" placeholder="Dan" autocomplete="off" value="${esc((USER&&USER.email)?USER.email.split("@")[0]:"")}"></div>
+      </div>
+      <div class="toolbar" style="margin-top:18px;">
+        <button class="btn big" id="shSend">\u2709 Open in my email app</button>
+        ${canNativeShare?`<button class="btn alt" id="shNative">Share\u2026</button>`:``}
+        <button class="btn alt" id="shCopy">Copy invite</button>
+        <button class="btn alt" id="shCopyLink">Copy link only</button>
+      </div>
+      <div id="shMsg" style="margin-top:12px;"></div>
+    </div>
+
+    <h2 class="sec">Preview</h2>
+    <div class="card">
+      <p class="muted" style="margin-bottom:8px;">This is exactly what they'll receive. It updates as you type.</p>
+      <pre id="shPreview" class="share-preview"></pre>
+    </div>
+
+    <h2 class="sec">The link</h2>
+    <div class="card">
+      <p class="desc" style="margin-bottom:10px;">Anyone can open this, no account needed.</p>
+      <div class="calc" style="word-break:break-all;">${esc(url)}</div>
+    </div>
+
+    <h2 class="sec">Shared with</h2>
+    <div class="card">
+      ${sent.length ? `<table><thead><tr><th>Name</th><th>Email</th><th>How</th><th>When</th><th></th></tr></thead><tbody>
+        ${sent.map(s=>`<tr>
+          <td><b>${esc(s.name||"\u2013")}</b></td>
+          <td class="muted">${esc(s.email||"\u2013")}</td>
+          <td class="muted">${esc(s.method||"")}</td>
+          <td class="muted">${fmtDateTime(s.date)}</td>
+          <td><button class="iconbtn danger" data-delshare="${s.id}" title="Remove from list">\u{1F5D1}</button></td>
+        </tr>`).join("")}
+      </tbody></table>` : `<p class="muted">Nobody yet. Anyone you share with gets listed here so you can keep track.</p>`}
+    </div>`;
+
+  const nameEl=$("#shName"), emailEl=$("#shEmail"), fromEl=$("#shFrom"), msgEl=$("#shMsg"), prevEl=$("#shPreview");
+
+  const refresh = ()=>{
+    const { subject, body } = buildInvite(nameEl.value.trim(), fromEl.value.trim());
+    prevEl.textContent = "Subject: " + subject + "\n\n" + body;
+  };
+  refresh();
+  [nameEl, fromEl].forEach(el=>el.addEventListener("input", refresh));
+
+  const validEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+
+  $("#shSend").onclick = ()=>{
+    const name=nameEl.value.trim(), email=emailEl.value.trim(), from=fromEl.value.trim();
+    if(!email || !validEmail(email)){ msgEl.innerHTML=`<span class="warn">Enter their email address first.</span>`; emailEl.focus(); return; }
+    const { subject, body } = buildInvite(name, from);
+    const href = "mailto:" + encodeURIComponent(email) + "?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body);
+    // Some browsers block window.open for mailto, so use a real anchor click.
+    const a = document.createElement("a"); a.href = href; a.style.display="none";
+    document.body.appendChild(a); a.click(); setTimeout(()=>a.remove(), 500);
+    logShare(name, email, "Email");
+    msgEl.innerHTML=`<span class="ok">Your email app should be opening with the invite ready to send to ${esc(email)}. If nothing happened, use <b>Copy invite</b> instead and paste it in yourself.</span>`;
+    setTimeout(()=>{ if(PAGE==="share") render(); }, 1200);
+  };
+
+  const nativeBtn = $("#shNative");
+  if(nativeBtn) nativeBtn.onclick = async ()=>{
+    const name=nameEl.value.trim(), email=emailEl.value.trim(), from=fromEl.value.trim();
+    const { subject, body } = buildInvite(name, from);
+    try{
+      await navigator.share({ title: subject, text: body, url: shareAppUrl() });
+      logShare(name, email, "Share sheet");
+      msgEl.innerHTML=`<span class="ok">Shared.</span>`;
+      setTimeout(()=>{ if(PAGE==="share") render(); }, 800);
+    }catch(e){ /* user cancelled, say nothing */ }
+  };
+
+  $("#shCopy").onclick = async ()=>{
+    const name=nameEl.value.trim(), email=emailEl.value.trim(), from=fromEl.value.trim();
+    const { body } = buildInvite(name, from);
+    const ok = await copyText(body);
+    if(ok){
+      logShare(name, email, "Copied");
+      msgEl.innerHTML=`<span class="ok">Invite copied. Paste it into an email, a text, or wherever suits.</span>`;
+      setTimeout(()=>{ if(PAGE==="share") render(); }, 900);
+    } else {
+      msgEl.innerHTML=`<span class="warn">Couldn't copy automatically. Select the preview text above and copy it manually.</span>`;
+    }
+  };
+
+  $("#shCopyLink").onclick = async ()=>{
+    const ok = await copyText(shareAppUrl());
+    msgEl.innerHTML = ok ? `<span class="ok">Link copied.</span>` : `<span class="warn">Couldn't copy. The link is shown above, copy it manually.</span>`;
+  };
+
+  document.querySelectorAll("[data-delshare]").forEach(b=>b.onclick=()=>{ deleteShare(b.dataset.delshare); render(); });
+}
+async function copyText(t){
+  try{
+    if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(t); return true; }
+  }catch(e){}
+  // Fallback for http / older browsers
+  try{
+    const ta=document.createElement("textarea");
+    ta.value=t; ta.setAttribute("readonly",""); ta.style.position="fixed"; ta.style.top="-1000px";
+    document.body.appendChild(ta); ta.select();
+    const ok=document.execCommand("copy"); ta.remove(); return ok;
+  }catch(e){ return false; }
+}
+
 /* ---------- Read Me ---------- */
 function readme(){
   $("#app").innerHTML = `
@@ -827,9 +1030,14 @@ function readme(){
       <li>Sign in once per device with your email and password to sync everything, including images.</li>
     </ol></div>
     <div class="card"><h3>Signing in</h3>
-      <p>Enter your email and password, tick <b>Stay signed in</b>, and tap <b>Login</b>. After that the session is restored automatically every time you open BrewGenge on that device, and your brews sync to the cloud on their own.</p>
-      <p>There is no signup screen. Accounts are created directly in <b>Supabase \u2192 Authentication \u2192 Users</b> (Add user \u2192 enter email and password \u2192 auto-confirm). Nothing is ever emailed, so nothing can expire or be pre-clicked by a mail scanner.</p>
+      <p>The first time you open BrewGenge you get a sign-in screen. If you haven't got an account yet, tap <b>Create account</b>, enter an email and a password (6+ characters), confirm it, and you're straight in. After that use <b>Sign in</b> on any other device.</p>
+      <p>Tick <b>Stay signed in on this device</b> (on by default) and the session restores automatically every time you open BrewGenge there, with your brews syncing on their own.</p>
+      <p>Nothing is ever emailed, so nothing can expire or be pre-clicked by a corporate mail scanner. You can also tap <b>Continue offline</b> and use the whole app with no account at all, saved in that browser only.</p>
       <p><b>Sync is merge-based.</b> When two devices both have recipes, BrewGenge combines them by recipe ID and keeps whichever version was edited most recently. An empty device can never wipe a populated cloud library.</p>
+    </div>
+    <div class="card"><h3>Sharing BrewGenge with someone</h3>
+      <p>The <b>Share BrewGenge</b> tab writes the invite for you, enter their name and email and it opens in your own email app ready to send. BrewGenge is a static site with no server, so it can't send mail itself, and sending from your own address means it won't get spam-filtered anyway. There's also a copy option and, on phones, the native share sheet.</p>
+      <p>Whoever you send it to can use the whole app without an account. If you want their recipes synced too, add them under Supabase \u2192 Authentication \u2192 Users and give them the login.</p>
     </div>
     <div class="card"><h3>Sharing recipe packs</h3>
       <p>Recipe Library → Export Recipe Pack. Uploaded images are embedded as Base64 inside the JSON and import with the recipe. Works with no account at all.</p>
@@ -1208,11 +1416,10 @@ function renderGate(forceShow){
     <div class="bg-gate-bg" id="bgGateBg"></div>
     <div class="bg-gate-card">
       <h1>BrewGenge</h1>
-      <p>Your brewing library, synced across every device.</p>
+      <p>${authMode === "signup" ? "Create an account to sync your brews across every device." : "Your brewing library, synced across every device."}</p>
       ${buildAuthFormHTML(stay, "gate")}
       <button class="bg-gate-offline" id="bgGateOffline">Continue offline</button>
     </div>`;
-  // Big logo behind the card: real logo file if present, drawn crest otherwise.
   const bgEl = document.getElementById("bgGateBg");
   if(bgEl) loadLogoInto(bgEl);
   wireAuthForm("gate");
@@ -1257,8 +1464,8 @@ document.addEventListener("visibilitychange", ()=>{
 });
 
 /* ============================================================ Logo / crest loading ============================================================ */
-// Tries the real logo file (jpeg -> jpg -> png), falls back to the drawn SVG crest.
-// Used by the sidebar crest, the login background and the app watermark, so a
+// Tries the real logo file (png -> jpeg -> jpg), falls back to the drawn SVG crest.
+// Shared by the sidebar crest, the login background and the app watermark, so a
 // missing logo file can never leave a broken image anywhere.
 function loadLogoInto(el, opts){
   opts = opts || {};
@@ -1266,20 +1473,15 @@ function loadLogoInto(el, opts){
   let i = 0;
   const img = document.createElement("img");
   img.alt = "BrewGenge";
-  img.style.width = "100%";
-  img.style.height = "100%";
-  img.style.objectFit = "contain";
-  img.style.display = "block";
+  img.style.width = "100%"; img.style.height = "100%"; img.style.display = "block";
+  img.style.objectFit = opts.round ? "cover" : "contain";
   if(opts.round) img.style.borderRadius = "50%";
-  if(opts.round) img.style.objectFit = "cover";
   img.onerror = function(){
     i++;
     if(i < candidates.length){ img.src = candidates[i]; }
     else { el.innerHTML = BREWGENGE_LOGO_SVG; }
   };
-  el.innerHTML = "";
-  el.appendChild(img);
-  img.src = candidates[0];
+  el.innerHTML = ""; el.appendChild(img); img.src = candidates[0];
 }
 function setupCrest(){
   const el = document.getElementById("crest");
