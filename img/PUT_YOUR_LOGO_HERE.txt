@@ -1,2 +1,14 @@
-Drop your logo image in this folder, named exactly one of: logo.jpeg, logo.jpg, logo.png (lowercase).
-The app tries all three automatically and falls back to a built-in drawn Celtic crest if none exist.
+logo.png in this folder is the BrewGenge crest.
+
+It is shown:
+  - large behind the login screen
+  - as a subtle watermark behind the app
+  - as the small round crest in the sidebar
+
+Its background has been made transparent so it sits correctly on both the
+light and dark themes.
+
+To swap it, replace logo.png (or add logo.jpeg / logo.jpg).
+Lowercase filenames only - GitHub Pages is case-sensitive.
+A transparent PNG works best. If no file is found, a built-in drawn crest
+is used instead, so nothing is ever a broken image.

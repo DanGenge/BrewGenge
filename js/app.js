@@ -1,21 +1,13 @@
 /* ============================================================
    BREWGENGE APP
    Vanilla JS, no build step. Works standalone off GitHub Pages.
-   Supabase cloud sync is optional and degrades gracefully.
 
-   AUTH: plain EMAIL + PASSWORD (signInWithPassword / signUp).
-   No magic links, no emailed codes, nothing clickable, nothing
-   that expires. Corporate mail scanners (Microsoft Defender Safe
-   Links etc.) auto-open links in inbound mail, which burns
-   single-use magic links before the user ever clicks them.
-   Password auth sidesteps that and needs no Supabase email config.
-
-   REQUIRED SUPABASE SETTING:
-   Authentication -> Sign In / Providers -> Email
-     - Email provider: ENABLED
-     - "Confirm email": OFF
-   Otherwise signup emails a confirmation LINK and you're back to
-   the same problem. No SQL change, no SMTP, no email templates.
+   AUTH: email + password only (supabase.auth.signInWithPassword).
+   No signup screen, no magic links, no emailed codes, no
+   confirmation email. Users are created directly in
+   Supabase -> Authentication -> Users. Sign in once per device,
+   the session is restored automatically on every later visit,
+   and brews sync to the cloud automatically.
    ============================================================ */
 
 const SB_URL = "https://goojuftzuiwoptjtlwfx.supabase.co";
@@ -24,11 +16,11 @@ const STORE = "brewgenge_state_v1";
 const STAY_SIGNED_IN_KEY = "brewgenge_stay_signed_in";
 const OFFLINE_MODE_KEY = "brewgenge_offline_mode";
 const LAST_EMAIL_KEY = "brewgenge_last_email";
+const THEME_KEY = "brewgenge_theme";
 
 let sb = null, USER = null, syncStatus = "local", syncTimer = null;
 let AUTH_INIT_ERROR = null;
 let LAST_SYNC_MESSAGE = "";
-let authMode = "signin"; // "signin" | "signup"
 
 /* ---------- State ---------- */
 function defaults(){
@@ -268,6 +260,7 @@ function render(){
     fermentables:fermentables,hops:hopsTab,water:water,brewday:brewday,fermentation:fermentation,
     cost:cost,finding:finding,supplier:supplier,account:account,readme:readme}[PAGE])();
   updateSyncBadge();
+  applyTheme(currentTheme());
   renderGate();
 }
 
@@ -735,21 +728,14 @@ function account(){
   const ready = !!sb;
   const stay = localStorage.getItem(STAY_SIGNED_IN_KEY) !== "0";
   $("#app").innerHTML = `
-    <div class="card"><h3>Account & Sync</h3>
-      <p class="desc">Sign in with an email and password to back up recipes, gear, pantry, ratings and images to the cloud and use BrewGenge across devices. Each account is completely private, give a mate a copy of the site and your libraries stay separate. Skip it entirely and everything still works, saved in this browser only.</p>
+    <div class="card"><h3>Account &amp; Sync</h3>
       <p>Status: <span id="syncStatusBadge" class="${USER?'badge-ok':''}">${USER?'Signed in as '+esc(USER.email):'Not signed in'}</span></p>
+      ${USER ? `<p class="muted" id="syncMsg" style="margin-top:8px;">${esc(LAST_SYNC_MESSAGE||"")}</p>` : ""}
     </div>
-    ${AUTH_INIT_ERROR ? `<div class="card"><p class="warn"><b>Supabase didn't load:</b> ${esc(AUTH_INIT_ERROR)}</p><p class="muted">Usually means the Supabase project is paused (free-tier projects auto-pause after about a week of inactivity, hit Restore on the dashboard), an ad-blocker/firewall blocked it, or you're offline. Local mode still works fully.</p></div>` : ""}
+    ${AUTH_INIT_ERROR ? `<div class="card"><p class="warn">${esc(AUTH_INIT_ERROR)}</p></div>` : ""}
     ${!ready ? "" :
-      USER ? `<div class="card"><div class="toolbar"><button class="btn" id="syncNow">Sync now</button><button class="btn alt" id="out">Sign out</button></div><p id="syncMsg" class="muted" style="margin-top:10px;">${esc(LAST_SYNC_MESSAGE||"")}</p></div>`
-      : buildAuthFormHTML(stay, "acct")}
-    <div class="card"><h3>Why a password and not an emailed link or code?</h3>
-      <p class="desc">Corporate email security (Microsoft Defender Safe Links and similar) automatically opens every link in inbound mail to scan it. Sign-in links are single use, so that scan burns the link before you ever click it, which is why magic links kept bouncing straight back to the login screen on a work address. Emailed codes need custom SMTP on Supabase to even print the number. A password needs none of that, nothing gets emailed, nothing expires, nothing can be pre-clicked.</p>
-      <div class="note"><b>One Supabase setting matters:</b> Authentication → Sign In / Providers → Email → turn <b>OFF</b> "Confirm email". Otherwise Supabase emails a confirmation link when you create an account and you're back to the same problem. With it off, Create account signs you straight in.</div>
-    </div>
-    <div class="card"><h3>Sharing recipes with mates</h3>
-      <p class="desc">Use <b>Export Recipe Pack</b> in the Recipe Library. Works with or without signing in, no account needed at all.</p>
-    </div>`;
+      USER ? `<div class="card"><div class="toolbar"><button class="btn" id="syncNow">Sync now</button><button class="btn alt" id="out">Sign out</button></div></div>`
+      : buildAuthFormHTML(stay, "acct")}`;
   if(USER){
     $("#syncNow").onclick=async()=>{ $("#syncNow").disabled=true; await safeSyncNow(); render(); };
     $("#out").onclick=async()=>{ if(sb) await sb.auth.signOut(); USER=null; syncStatus="local"; render(); };
@@ -758,73 +744,43 @@ function account(){
   }
 }
 
-// Shared markup for both the Account tab and the login gate. prefix avoids id clashes.
+// Shared login form, used by both the Account tab and the login gate.
+// prefix avoids duplicate element ids when both exist.
 function buildAuthFormHTML(stay, prefix){
   const lastEmail = localStorage.getItem(LAST_EMAIL_KEY) || "";
-  const isSignup = authMode === "signup";
   return `<div class="card">
-    <div class="authtabs">
-      <button class="authtab ${!isSignup?'on':''}" id="${prefix}TabIn">Sign in</button>
-      <button class="authtab ${isSignup?'on':''}" id="${prefix}TabUp">Create account</button>
-    </div>
     <div class="field"><label>Email</label><input id="${prefix}Email" type="email" placeholder="you@example.com" autocomplete="email" value="${esc(lastEmail)}"></div>
-    <div class="field" style="margin-top:12px;"><label>Password</label><input id="${prefix}Pass" type="password" placeholder="${isSignup?'At least 6 characters':'Your password'}" autocomplete="${isSignup?'new-password':'current-password'}"></div>
-    ${isSignup ? `<div class="field" style="margin-top:12px;"><label>Confirm password</label><input id="${prefix}Pass2" type="password" placeholder="Type it again" autocomplete="new-password"></div>` : ``}
-    <label class="toggle" style="margin:14px 0 12px; display:flex; align-items:center; gap:8px;"><input type="checkbox" id="${prefix}Stay" ${stay?"checked":""}> Stay signed in on this device</label>
-    <button class="btn" id="${prefix}Go">${isSignup?'Create account':'Sign in'}</button>
+    <div class="field" style="margin-top:12px;"><label>Password</label><input id="${prefix}Pass" type="password" placeholder="Your password" autocomplete="current-password"></div>
+    <label class="toggle" style="margin:14px 0 12px; display:flex; align-items:center; gap:8px;"><input type="checkbox" id="${prefix}Stay" ${stay?"checked":""}> Stay signed in</label>
+    <button class="btn big" id="${prefix}Go">Login</button>
     <div id="${prefix}Msg" style="margin-top:10px;"></div>
   </div>`;
 }
 function wireAuthForm(prefix){
-  const setMode = (m)=>{ authMode = m; if(prefix==="acct") render(); else renderGate(true); };
-  const tIn = $("#"+prefix+"TabIn"); if(tIn) tIn.onclick = ()=> setMode("signin");
-  const tUp = $("#"+prefix+"TabUp"); if(tUp) tUp.onclick = ()=> setMode("signup");
-  const stayInput = $("#"+prefix+"Stay"); if(stayInput) stayInput.onchange = e=>localStorage.setItem(STAY_SIGNED_IN_KEY, e.target.checked?"1":"0");
+  const stayInput = $("#"+prefix+"Stay");
+  if(stayInput) stayInput.onchange = e=>localStorage.setItem(STAY_SIGNED_IN_KEY, e.target.checked?"1":"0");
   const goBtn = $("#"+prefix+"Go"); if(goBtn) goBtn.onclick = ()=> doAuth(prefix);
   const passEl = $("#"+prefix+"Pass"); if(passEl) passEl.addEventListener("keydown", e=>{ if(e.key==="Enter") doAuth(prefix); });
-  const pass2El = $("#"+prefix+"Pass2"); if(pass2El) pass2El.addEventListener("keydown", e=>{ if(e.key==="Enter") doAuth(prefix); });
   const emailEl = $("#"+prefix+"Email"); if(emailEl) emailEl.addEventListener("keydown", e=>{ if(e.key==="Enter" && passEl) passEl.focus(); });
 }
 async function doAuth(prefix){
   const msgEl = $("#"+prefix+"Msg");
   const email = ($("#"+prefix+"Email").value||"").trim();
   const pass = ($("#"+prefix+"Pass").value||"");
-  const isSignup = authMode === "signup";
-
   if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ msgEl.innerHTML = `<span class="warn">Enter a valid email address.</span>`; return; }
   if(!pass){ msgEl.innerHTML = `<span class="warn">Enter your password.</span>`; return; }
-  if(isSignup){
-    if(pass.length < 6){ msgEl.innerHTML = `<span class="warn">Password must be at least 6 characters.</span>`; return; }
-    const pass2 = ($("#"+prefix+"Pass2").value||"");
-    if(pass !== pass2){ msgEl.innerHTML = `<span class="warn">Those two passwords don't match.</span>`; return; }
-  }
-  if(!sb){ msgEl.innerHTML = `<span class="warn">Still connecting to Supabase. If this keeps happening the project may be paused, check the Supabase dashboard.</span>`; return; }
+  if(!sb){ msgEl.innerHTML = `<span class="warn">Still connecting. If this persists the Supabase project may be paused.</span>`; return; }
 
   const goBtn = $("#"+prefix+"Go");
-  msgEl.innerHTML = `<span class="muted">${isSignup?'Creating your account...':'Signing in...'}</span>`;
+  msgEl.innerHTML = `<span class="muted">Signing in...</span>`;
   if(goBtn) goBtn.disabled = true;
-
   try{
-    let result;
-    if(isSignup) result = await sb.auth.signUp({ email, password: pass });
-    else result = await sb.auth.signInWithPassword({ email, password: pass });
-
-    const { data, error } = result;
+    const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
     if(error){
-      msgEl.innerHTML = `<span class="warn">${esc(friendlyAuthError(error.message, isSignup))}</span>`;
+      msgEl.innerHTML = `<span class="warn">${esc(friendlyAuthError(error.message))}</span>`;
       if(goBtn) goBtn.disabled = false;
       return;
     }
-
-    // If "Confirm email" is still on in Supabase, signUp returns a user but NO
-    // session, because it's waiting on an emailed confirmation link. Say so
-    // plainly rather than appearing to hang.
-    if(isSignup && data && data.user && !data.session){
-      msgEl.innerHTML = `<span class="warn">Account created, but Supabase is set to require email confirmation, so it has emailed you a confirmation link. To avoid links entirely, turn <b>OFF</b> "Confirm email" under Authentication → Sign In / Providers → Email in your Supabase dashboard, then create the account again.</span>`;
-      if(goBtn) goBtn.disabled = false;
-      return;
-    }
-
     USER = (data && data.user) ? data.user : (data && data.session ? data.session.user : USER);
     localStorage.setItem(LAST_EMAIL_KEY, email);
     localStorage.removeItem(OFFLINE_MODE_KEY);
@@ -833,19 +789,31 @@ async function doAuth(prefix){
     renderGate();
     if(PAGE==="account") render();
   }catch(e){
-    msgEl.innerHTML = `<span class="warn">Network error contacting Supabase: ${esc(e.message)}. Usually means the project is paused or unreachable from this network.</span>`;
+    msgEl.innerHTML = `<span class="warn">Network error: ${esc(e.message)}. The Supabase project may be paused or unreachable.</span>`;
     if(goBtn) goBtn.disabled = false;
   }
 }
-function friendlyAuthError(msg, isSignup){
+function friendlyAuthError(msg){
   const m = (msg||"").toLowerCase();
-  if(/invalid login credentials/.test(m)) return "Wrong email or password. If you haven't made an account yet, tap Create account.";
-  if(/user already registered|already been registered/.test(m)) return "There's already an account with that email. Tap Sign in instead.";
-  if(/password should be at least/.test(m)) return "Password is too short, use at least 6 characters.";
-  if(/email logins are disabled|signups not allowed|signup is disabled/.test(m)) return "Email sign-ups are disabled on this Supabase project. Enable the Email provider under Authentication → Sign In / Providers.";
-  if(/rate|too many/.test(m)) return "Too many attempts just now, wait a minute and try again.";
+  if(/invalid login credentials/.test(m)) return "Wrong email or password.";
+  if(/email logins are disabled/.test(m)) return "Email sign-in is disabled on this Supabase project.";
+  if(/email not confirmed/.test(m)) return "This account is not confirmed yet. Confirm it under Supabase \u2192 Authentication \u2192 Users.";
+  if(/rate|too many/.test(m)) return "Too many attempts, wait a minute and try again.";
   return msg;
 }
+
+/* ============================================================ Dark mode ============================================================ */
+function currentTheme(){ return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; }
+function applyTheme(t){
+  document.documentElement.setAttribute("data-theme", t === "dark" ? "dark" : "light");
+  localStorage.setItem(THEME_KEY, t === "dark" ? "dark" : "light");
+  const btn = document.getElementById("themeToggle");
+  if(btn){
+    btn.textContent = t === "dark" ? "\u2600" : "\u263D";
+    btn.title = t === "dark" ? "Switch to light mode" : "Switch to dark mode";
+  }
+}
+function toggleTheme(){ applyTheme(currentTheme() === "dark" ? "light" : "dark"); }
 
 /* ---------- Read Me ---------- */
 function readme(){
@@ -858,12 +826,10 @@ function readme(){
       <li>Water tab covers mash, sparge and salt additions, all in real litres and grams.</li>
       <li>Sign in once per device with your email and password to sync everything, including images.</li>
     </ol></div>
-    <div class="card"><h3>Signing in: email and password</h3>
-      <p>First time: tap <b>Create account</b>, enter your email, pick a password (6+ characters), confirm it, done. After that just <b>Sign in</b> on any device. Tick <b>Stay signed in on this device</b> (on by default) and you won't be asked again on that device.</p>
-      <p>No magic links, no emailed codes, nothing to click, nothing that expires. This matters on a work email address, corporate mail scanners like Microsoft Defender Safe Links auto-open links in inbound mail, which burns single-use sign-in links before you ever click them.</p>
-      <div class="note"><b>Supabase setup:</b> Authentication → Sign In / Providers → Email → make sure the Email provider is <b>enabled</b> and <b>"Confirm email" is OFF</b>. That's the only auth setting BrewGenge needs. No SMTP, no email templates, no SQL beyond the one sync table.</div>
-      <p><b>No password reset.</b> Since nothing is emailed, there's no reset flow. If you forget it, delete the user under Supabase → Authentication → Users and create the account again. Export a Recipe Pack first as a backup if you do.</p>
-      <p><b>Sync is merge-based, not overwrite-based.</b> When two devices both have recipes, BrewGenge combines them by recipe ID and keeps whichever version was edited most recently. An empty device can never wipe a populated cloud library.</p>
+    <div class="card"><h3>Signing in</h3>
+      <p>Enter your email and password, tick <b>Stay signed in</b>, and tap <b>Login</b>. After that the session is restored automatically every time you open BrewGenge on that device, and your brews sync to the cloud on their own.</p>
+      <p>There is no signup screen. Accounts are created directly in <b>Supabase \u2192 Authentication \u2192 Users</b> (Add user \u2192 enter email and password \u2192 auto-confirm). Nothing is ever emailed, so nothing can expire or be pre-clicked by a mail scanner.</p>
+      <p><b>Sync is merge-based.</b> When two devices both have recipes, BrewGenge combines them by recipe ID and keeps whichever version was edited most recently. An empty device can never wipe a populated cloud library.</p>
     </div>
     <div class="card"><h3>Sharing recipe packs</h3>
       <p>Recipe Library → Export Recipe Pack. Uploaded images are embedded as Base64 inside the JSON and import with the recipe. Works with no account at all.</p>
@@ -1239,13 +1205,16 @@ function renderGate(forceShow){
   const stay = localStorage.getItem(STAY_SIGNED_IN_KEY) !== "0";
   if(!gate){ gate = document.createElement("div"); gate.id = "bgGate"; gate.className = "bg-gate"; document.body.appendChild(gate); }
   gate.innerHTML = `
+    <div class="bg-gate-bg" id="bgGateBg"></div>
     <div class="bg-gate-card">
-      <div class="bg-gate-logo">${BREWGENGE_LOGO_SVG}</div>
       <h1>BrewGenge</h1>
-      <p>Your brewing library, safely synced across every device.</p>
+      <p>Your brewing library, synced across every device.</p>
       ${buildAuthFormHTML(stay, "gate")}
-      <button class="btn alt" id="bgGateOffline" style="width:100%;margin-top:8px;">Continue offline</button>
+      <button class="bg-gate-offline" id="bgGateOffline">Continue offline</button>
     </div>`;
+  // Big logo behind the card: real logo file if present, drawn crest otherwise.
+  const bgEl = document.getElementById("bgGateBg");
+  if(bgEl) loadLogoInto(bgEl);
   wireAuthForm("gate");
   const offlineBtn = $("#bgGateOffline"); if(offlineBtn) offlineBtn.onclick = ()=>{ localStorage.setItem(OFFLINE_MODE_KEY, "1"); removeGate(); };
 }
@@ -1288,17 +1257,42 @@ document.addEventListener("visibilitychange", ()=>{
 });
 
 /* ============================================================ Logo / crest loading ============================================================ */
+// Tries the real logo file (jpeg -> jpg -> png), falls back to the drawn SVG crest.
+// Used by the sidebar crest, the login background and the app watermark, so a
+// missing logo file can never leave a broken image anywhere.
+function loadLogoInto(el, opts){
+  opts = opts || {};
+  const candidates = ["img/logo.png", "img/logo.jpeg", "img/logo.jpg"];
+  let i = 0;
+  const img = document.createElement("img");
+  img.alt = "BrewGenge";
+  img.style.width = "100%";
+  img.style.height = "100%";
+  img.style.objectFit = "contain";
+  img.style.display = "block";
+  if(opts.round) img.style.borderRadius = "50%";
+  if(opts.round) img.style.objectFit = "cover";
+  img.onerror = function(){
+    i++;
+    if(i < candidates.length){ img.src = candidates[i]; }
+    else { el.innerHTML = BREWGENGE_LOGO_SVG; }
+  };
+  el.innerHTML = "";
+  el.appendChild(img);
+  img.src = candidates[0];
+}
 function setupCrest(){
-  const el = document.getElementById("crest"); if(!el) return;
-  const candidates = ["img/logo.jpeg", "img/logo.jpg", "img/logo.png"]; let i = 0;
-  const img = document.createElement("img"); img.alt = "BrewGenge";
-  img.style.width = "100%"; img.style.height = "100%"; img.style.borderRadius = "50%"; img.style.objectFit = "cover"; img.style.display = "block";
-  img.onerror = function(){ i++; if(i < candidates.length){ img.src = candidates[i]; } else { el.innerHTML = BREWGENGE_LOGO_SVG; } };
-  el.innerHTML = ""; el.appendChild(img); img.src = candidates[0];
+  const el = document.getElementById("crest");
+  if(el) loadLogoInto(el, {round:true});
+  const wm = document.getElementById("appWatermark");
+  if(wm) loadLogoInto(wm);
 }
 
 /* ============================================================ Boot ============================================================ */
+applyTheme(currentTheme());
 setupCrest();
 $("#menu").onclick = ()=> $("aside").classList.toggle("open");
+const themeBtn = document.getElementById("themeToggle");
+if(themeBtn) themeBtn.onclick = toggleTheme;
 render();
 initSupabase();

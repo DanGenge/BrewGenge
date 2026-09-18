@@ -1,48 +1,52 @@
 # BrewGenge · Ultimate Brew Calculator
 
-A free, static brew calculator with optional Supabase cloud sync. Built around the Guten 50L.
+A static brew calculator with Supabase cloud sync. Built around the Guten 50L.
 
-## Sign-in: email + password
+## Signing in
 
-Tap **Create account**, enter your email, pick a password (6+ characters), confirm it. After that, **Sign in** on any device. Tick **Stay signed in on this device** (on by default) and you won't be asked again on that device.
+Email + password. That's it.
 
-No magic links. No emailed codes. Nothing to click, nothing that expires, nothing that can be pre-opened by a mail scanner.
+1. Enter your email and password
+2. Tick **Stay signed in**
+3. Tap **Login**
 
-### Why the switch
+The session is restored automatically every time you open BrewGenge on that device, and your brews sync to the cloud on their own. Nothing is emailed, so nothing expires and nothing can be pre-clicked by a corporate mail scanner.
 
-Magic links kept failing on `@orica.com` because corporate mail security (Microsoft Defender Safe Links and equivalents) automatically opens every link in inbound mail to scan it. Sign-in links are single-use, so the scan burned the link before it was ever clicked, producing an "expired/invalid" bounce straight back to the login screen with no visible error.
+There is **no signup screen**. Accounts are created directly in Supabase.
 
-The emailed-6-digit-code approach would also have worked, but printing the code requires editing the Supabase **Magic Link email template**, and template editing is locked behind custom SMTP on the free tier. So the code never appeared in the email and the app sat waiting for a number that was never sent.
+### Creating a user
 
-Password auth avoids both problems entirely: nothing is emailed at all.
+Supabase dashboard → **Authentication → Users → Add user**:
+- Email + password
+- Tick **Auto Confirm User**
 
-## Supabase setup
+That's the whole process. Repeat for anyone else who needs access — each account's brews stay completely private to that account.
 
-**No SQL change.** `supabase/001_user_app_state.sql` is identical to previous versions. If you've already run it, don't run it again.
+### Supabase settings
 
-**One dashboard setting:**
+**No SQL change.** `supabase/001_user_app_state.sql` is unchanged from every previous version. If you've run it before, don't run it again.
 
-Authentication → **Sign In / Providers** → **Email**
-- Email provider: **enabled**
-- **"Confirm email": OFF**
+Authentication → **Sign In / Providers** → **Email**: provider **enabled**. Since accounts are made by hand with Auto Confirm ticked, the "Confirm email" toggle no longer matters either way.
 
-If "Confirm email" is left ON, Supabase emails a confirmation *link* when you create an account, and you're back to the original problem. With it off, Create account signs you straight in. BrewGenge detects this case and tells you plainly rather than appearing to hang.
+No SMTP. No email templates. No confirmation emails.
 
-No SMTP, no email templates, nothing else.
+> **No password reset.** Nothing is emailed, so there's no reset flow. If you forget a password, change it in Supabase → Authentication → Users → (user) → reset password. Your brews stay attached to the account.
 
-### No password reset
+## Dark mode
 
-Since nothing is emailed, there's no password reset flow. If you forget it, delete the user under Supabase → Authentication → Users and create the account again. Export a Recipe Pack first as a backup if you do.
+Toggle in the top-right of the header — **☽ moon** switches to dark, **☀ sun** switches back. Your choice is remembered on that device and survives page reloads.
+
+## Logo
+
+`img/logo.png` is the BrewGenge crest, shown large behind the login screen and as a subtle watermark behind the app. Its background has been made transparent so it sits correctly on both light and dark themes.
+
+To swap it, replace `img/logo.png` (or add `img/logo.jpeg` / `img/logo.jpg`). Lowercase filenames — GitHub Pages is case-sensitive. A transparent PNG works best. If no file is found, a built-in drawn crest is used instead.
 
 ## Deploy to GitHub Pages
 
 1. Upload `index.html`, `css`, `js`, `img` and `supabase` to your repository root (replace everything).
 2. **Settings → Pages → Deploy from a branch → main → / (root)**.
 3. Hard refresh once (Ctrl/Cmd + Shift + R) after it deploys.
-
-## Adding your own logo
-
-Drop a file at `img/logo.jpeg` (or `.jpg` / `.png`). Lowercase filename, GitHub Pages is case-sensitive. Falls back to a built-in drawn crest if absent.
 
 ## Sync is merge-based, not overwrite-based
 
@@ -58,7 +62,7 @@ Dashboard · Recipe Library · Recipe Detail popup (image, style comparison, liv
 
 ## Changelog
 
-- **Email + password sign-in** replaces the emailed-code flow, which replaced magic links. Nothing is emailed during sign-in at all. Sign in / Create account tabs, password confirmation on signup, plain-English error messages, and an explicit warning if Supabase's "Confirm email" setting is still on.
-- Safe merge sync: recipes, images, favourites, pantry, ratings and brew history combined by most-recently-edited rather than overwritten in either direction.
-- Water tab: strike/sparge temperatures and volumes, automatic salt addition calculator, style-aware water targets for new/imported recipes.
-- Recipe Detail popup with image, style-range comparison, colour estimate, live shopping list, star rating and brew history log.
+- **Login only.** Removed the signup screen, the Create Account tab, confirmation-email handling and all the auth explainer clutter. Just email, password, stay signed in, Login. Sign out lives under Account & Sync.
+- **Dark mode toggle** in the header, persisted per device, applied across every tab, table, modal and the login screen.
+- **Big BrewGenge crest** behind the login screen, plus a subtle watermark behind the app. Logo background made transparent so it works on light and dark.
+- Safe merge sync, water/salt calculator, recipe detail popup — all unchanged.
