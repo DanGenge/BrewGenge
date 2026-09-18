@@ -2,6 +2,15 @@
    BREWGENGE APP
    Vanilla JS, no build step. Works standalone off GitHub Pages.
    Supabase cloud sync is optional and degrades gracefully.
+
+   AUTH DESIGN NOTE: this app deliberately uses a TYPED 6-DIGIT CODE
+   (Supabase email OTP + verifyOtp) instead of a clickable magic link.
+   Clickable magic links are frequently "clicked" automatically by
+   corporate email security scanners (e.g. Microsoft Defender Safe
+   Links / URL detonation) before the real user ever opens the email,
+   silently burning the single-use token. A typed code sitting as
+   plain text in the email body cannot be consumed this way, which
+   makes it far more reliable for work/corporate email domains.
    ============================================================ */
 
 const SB_URL = "https://goojuftzuiwoptjtlwfx.supabase.co";
@@ -14,40 +23,25 @@ const OFFLINE_MODE_KEY = "brewgenge_offline_mode";
 
 let sb = null, USER = null, syncStatus = "local", syncTimer = null;
 let AUTH_INIT_ERROR = null;
-let AUTH_CALLBACK_ERROR = null;
+let LAST_SYNC_MESSAGE = "";
+let codeStepEmail = null;
+let cooldownTimer = null;
 
 /* ---------- State ---------- */
 function defaults(){
   return {
-    selectedId: RECIPES[0].id,
-    batchSize: 40,
-    equipmentId: EQUIPMENT_PROFILES[0].id,
-    favourites: [],
-    myRecipes: [],
-    myEquipment: [],
-    overrides: {},
-    hidden: [],
-    pantry: {},
-    ratings: {},
-    brewSessions: {},
-    sourceWater: Object.assign({}, FLORAVILLE_WATER),
-    grainTempC: DEFAULT_GRAIN_TEMP_C,
-    spargeTempC: DEFAULT_SPARGE_TEMP_C,
-    efficiency: 0.75,
-    fermLog: [],
-    draftRecipe: null,
-    draftEquipment: null,
-    lastActivityAt: null
+    selectedId: RECIPES[0].id, batchSize: 40, equipmentId: EQUIPMENT_PROFILES[0].id,
+    favourites: [], myRecipes: [], myEquipment: [], overrides: {}, hidden: [], pantry: {},
+    ratings: {}, brewSessions: {}, sourceWater: Object.assign({}, FLORAVILLE_WATER),
+    grainTempC: DEFAULT_GRAIN_TEMP_C, spargeTempC: DEFAULT_SPARGE_TEMP_C, efficiency: 0.75,
+    fermLog: [], draftRecipe: null, draftEquipment: null, lastActivityAt: null
   };
 }
 let STATE = load();
 repairWaterlessCustomRecipes(STATE);
 function load(){
-  try{
-    const raw = localStorage.getItem(STORE);
-    if(!raw) return defaults();
-    return merge(defaults(), JSON.parse(raw));
-  }catch(e){ console.warn("load failed", e); return defaults(); }
+  try{ const raw = localStorage.getItem(STORE); if(!raw) return defaults(); return merge(defaults(), JSON.parse(raw)); }
+  catch(e){ console.warn("load failed", e); return defaults(); }
 }
 function merge(base, over){
   if(Array.isArray(base)) return over !== undefined ? over : base;
@@ -59,27 +53,14 @@ function merge(base, over){
   }
   return over !== undefined ? over : base;
 }
-function save(){
-  STATE.lastActivityAt = new Date().toISOString();
-  localStorage.setItem(STORE, JSON.stringify(STATE));
-  cloudPush();
-}
+function save(){ STATE.lastActivityAt = new Date().toISOString(); localStorage.setItem(STORE, JSON.stringify(STATE)); cloudPush(); }
 
-// One-time repair for recipes saved before the water-target fix.
-function waterMatchesFloraville(w){
-  if(!w) return false;
-  return WATER_IONS.every(ion => Math.abs((w[ion]||0) - (FLORAVILLE_WATER[ion]||0)) < 0.01);
-}
+function waterMatchesFloraville(w){ if(!w) return false; return WATER_IONS.every(ion => Math.abs((w[ion]||0) - (FLORAVILLE_WATER[ion]||0)) < 0.01); }
 function repairWaterlessCustomRecipes(state){
   if(!state || !Array.isArray(state.myRecipes)) return;
   let fixed = 0;
-  state.myRecipes.forEach(r=>{
-    if(waterMatchesFloraville(r.water)){ r.water = defaultWaterForStyle(r.style); fixed++; }
-  });
-  if(fixed>0){
-    localStorage.setItem(STORE, JSON.stringify(state));
-    console.info("BrewGenge: repaired water target on "+fixed+" recipe(s).");
-  }
+  state.myRecipes.forEach(r=>{ if(waterMatchesFloraville(r.water)){ r.water = defaultWaterForStyle(r.style); fixed++; } });
+  if(fixed>0){ localStorage.setItem(STORE, JSON.stringify(state)); console.info("BrewGenge: repaired water target on "+fixed+" recipe(s)."); }
 }
 
 /* ---------- Helpers ---------- */
@@ -94,55 +75,34 @@ const fmtDateTime = iso => { if(!iso) return "-"; try{ return new Date(iso).toLo
 /* ---------- Recipe access ---------- */
 function allRecipes(){
   const combined = RECIPES.concat(STATE.myRecipes || []);
-  const hidden = STATE.hidden || [];
-  const ov = STATE.overrides || {};
+  const hidden = STATE.hidden || []; const ov = STATE.overrides || {};
   return combined.filter(r=>!hidden.includes(r.id)).map(r=>{
-    const o = ov[r.id];
-    if(!o) return r;
+    const o = ov[r.id]; if(!o) return r;
     return Object.assign({}, r, { name:o.name||r.name, image:o.image!==undefined?o.image:r.image });
   });
 }
 function isCustom(id){ return (STATE.myRecipes||[]).some(r=>r.id===id); }
 function selected(){ return allRecipes().find(r=>r.id===STATE.selectedId) || allRecipes()[0] || RECIPES[0]; }
-function recipeThumb(r){
-  if(r.image) return `<img src="${r.image}" alt="">`;
-  return RECIPE_SVG_ICONS[r.id] || CUSTOM_RECIPE_SVG_ICON;
-}
+function recipeThumb(r){ if(r.image) return `<img src="${r.image}" alt="">`; return RECIPE_SVG_ICONS[r.id] || CUSTOM_RECIPE_SVG_ICON; }
 function isFav(id){ return (STATE.favourites||[]).includes(id); }
-function toggleFav(id){
-  const i = STATE.favourites.indexOf(id);
-  if(i>=0) STATE.favourites.splice(i,1); else STATE.favourites.push(id);
-  save();
-}
+function toggleFav(id){ const i = STATE.favourites.indexOf(id); if(i>=0) STATE.favourites.splice(i,1); else STATE.favourites.push(id); save(); }
 function getRating(id){ return (STATE.ratings||{})[id] || 0; }
-function setRating(id, n){
-  if(!STATE.ratings) STATE.ratings = {};
-  STATE.ratings[id] = (STATE.ratings[id] === n) ? 0 : n;
-  save();
-}
+function setRating(id, n){ if(!STATE.ratings) STATE.ratings = {}; STATE.ratings[id] = (STATE.ratings[id] === n) ? 0 : n; save(); }
 function ensureLabel(r){
-  let n = (r.name||"").trim();
-  const copy = n.match(/\s*\(copy\)$/i);
-  if(copy) n = n.slice(0, copy.index).trim();
+  let n = (r.name||"").trim(); const copy = n.match(/\s*\(copy\)$/i); if(copy) n = n.slice(0, copy.index).trim();
   if(!/^brewgenge\b/i.test(n)) n = n ? "BrewGenge "+n : "BrewGenge "+(r.style||"Original");
-  if(copy) n += " (copy)";
-  r.name = n; return r;
+  if(copy) n += " (copy)"; r.name = n; return r;
 }
 function saveRecipe(r){
-  if(!r.id) r.id = uid("brew");
-  ensureLabel(r);
-  if(!r.water || typeof r.water !== "object" || WATER_IONS.some(ion => r.water[ion]==null)){
-    r.water = defaultWaterForStyle(r.style);
-  }
-  r.updatedAt = new Date().toISOString();
-  if(!r.createdAt) r.createdAt = r.updatedAt;
+  if(!r.id) r.id = uid("brew"); ensureLabel(r);
+  if(!r.water || typeof r.water !== "object" || WATER_IONS.some(ion => r.water[ion]==null)) r.water = defaultWaterForStyle(r.style);
+  r.updatedAt = new Date().toISOString(); if(!r.createdAt) r.createdAt = r.updatedAt;
   const i = (STATE.myRecipes||[]).findIndex(x=>x.id===r.id);
   if(i>=0) STATE.myRecipes[i] = r; else STATE.myRecipes.push(r);
   save(); return r.id;
 }
 function deleteRecipe(id){
-  if(isCustom(id)){ STATE.myRecipes = STATE.myRecipes.filter(r=>r.id!==id); }
-  else { if(!STATE.hidden.includes(id)) STATE.hidden.push(id); }
+  if(isCustom(id)){ STATE.myRecipes = STATE.myRecipes.filter(r=>r.id!==id); } else { if(!STATE.hidden.includes(id)) STATE.hidden.push(id); }
   if(STATE.selectedId===id){ const rem = allRecipes(); STATE.selectedId = rem.length?rem[0].id:RECIPES[0].id; }
   save();
 }
@@ -183,53 +143,34 @@ function deleteEquipment(id){
 
 /* ---------- Pantry ---------- */
 function pantried(recipeId, name){ return !!(STATE.pantry[recipeId] && STATE.pantry[recipeId][name]); }
-function togglePantry(recipeId, name, on){
-  STATE.pantry[recipeId] = STATE.pantry[recipeId] || {};
-  STATE.pantry[recipeId][name] = on; save();
-}
+function togglePantry(recipeId, name, on){ STATE.pantry[recipeId] = STATE.pantry[recipeId] || {}; STATE.pantry[recipeId][name] = on; save(); }
 
 /* ---------- Brew sessions ---------- */
 function getSessions(id){ return (STATE.brewSessions||{})[id] || []; }
 function addSession(id, entry){
-  if(!STATE.brewSessions) STATE.brewSessions = {};
-  if(!STATE.brewSessions[id]) STATE.brewSessions[id] = [];
+  if(!STATE.brewSessions) STATE.brewSessions = {}; if(!STATE.brewSessions[id]) STATE.brewSessions[id] = [];
   entry.id = uid("sess"); entry.date = entry.date || new Date().toISOString();
-  STATE.brewSessions[id].push(entry);
-  save();
+  STATE.brewSessions[id].push(entry); save();
 }
 function deleteSession(id, sessId){
-  if(STATE.brewSessions && STATE.brewSessions[id]){
-    STATE.brewSessions[id] = STATE.brewSessions[id].filter(s=>s.id!==sessId);
-    save();
-  }
+  if(STATE.brewSessions && STATE.brewSessions[id]){ STATE.brewSessions[id] = STATE.brewSessions[id].filter(s=>s.id!==sessId); save(); }
 }
 
-/* ---------- Style guideline lookup + rough colour estimate ---------- */
-function findStyleGuideline(styleName){
-  const key = (styleName||"").trim().toLowerCase();
-  return STYLE_GUIDELINES[key] || null;
-}
+/* ---------- Style guideline lookup + colour estimate ---------- */
+function findStyleGuideline(styleName){ const key = (styleName||"").trim().toLowerCase(); return STYLE_GUIDELINES[key] || null; }
 function estimateColorEBC(r){
   const total = (r.ferm||[]).reduce((s,f)=>s+f[1],0) || 1;
   let ebc = 0;
   (r.ferm||[]).forEach(f=>{
-    const n = f[0].toLowerCase();
-    let malColor = 6;
-    if(/pilsner/.test(n)) malColor = 4;
-    else if(/vienna/.test(n)) malColor = 8;
-    else if(/munich/.test(n)) malColor = 18;
-    else if(/melanoidin/.test(n)) malColor = 60;
-    else if(/crystal|caramel/.test(n)) malColor = 140;
-    else if(/carafa|roast/.test(n)) malColor = 900;
-    else if(/chocolate/.test(n)) malColor = 900;
-    else if(/carapils|dextrine/.test(n)) malColor = 4;
+    const n = f[0].toLowerCase(); let malColor = 6;
+    if(/pilsner/.test(n)) malColor = 4; else if(/vienna/.test(n)) malColor = 8; else if(/munich/.test(n)) malColor = 18;
+    else if(/melanoidin/.test(n)) malColor = 60; else if(/crystal|caramel/.test(n)) malColor = 140;
+    else if(/carafa|roast/.test(n)) malColor = 900; else if(/chocolate/.test(n)) malColor = 900; else if(/carapils|dextrine/.test(n)) malColor = 4;
     ebc += (f[1]/total) * malColor;
   });
-  ebc = Math.max(3, ebc * (total/8));
-  ebc = Math.min(ebc, 900);
+  ebc = Math.max(3, ebc * (total/8)); ebc = Math.min(ebc, 900);
   const hexMap = [[6,"#f6e29a"],[10,"#f0cf6a"],[16,"#e6b13e"],[26,"#d68e2e"],[40,"#b8621e"],[70,"#8a3f18"],[130,"#5a2712"],[300,"#301209"],[900,"#0d0605"]];
-  let hex = "#5a2712";
-  for(const [thresh,h] of hexMap){ if(ebc<=thresh){ hex=h; break; } }
+  let hex = "#5a2712"; for(const [thresh,h] of hexMap){ if(ebc<=thresh){ hex=h; break; } }
   return { ebc, hex };
 }
 
@@ -237,17 +178,13 @@ function estimateColorEBC(r){
 function scaleFactor(r){ return STATE.batchSize / (r.baseBatch || 40); }
 function tinseth(t, og){ return 1.65 * Math.pow(0.000125, og-1) * (1-Math.exp(-0.04*t)) / 4.15; }
 function calc(r){
-  const sf = scaleFactor(r);
-  const eq = currentEquipment();
+  const sf = scaleFactor(r); const eq = currentEquipment();
   const ferm = (r.ferm||[]).map(f=>({ name:f[0], kg:f[1]*sf, price:(f[2]!=null?f[2]:FERMENTABLE_PRICE.default), owned:pantried(r.id,f[0]) }));
   const totalGrain = ferm.reduce((s,f)=>s+f.kg,0);
   const preboil = STATE.batchSize + eq.kettleLoss + eq.boilOff;
   const og = r.og || 1.05;
   const hops = (r.hops||[]).map(h=>{
-    const g = h[1]*sf;
-    const aa = h[2]!=null?h[2]:10;
-    const stage = h[3]||"Boil";
-    const time = h[4]!=null?h[4]:60;
+    const g = h[1]*sf; const aa = h[2]!=null?h[2]:10; const stage = h[3]||"Boil"; const time = h[4]!=null?h[4]:60;
     const util = stage==="Boil"?1 : stage==="Whirlpool"?0.35 : 0;
     const ibu = stage==="Dry Hop" ? 0 : (g*(aa/100)*1000*tinseth(time,og)*util)/preboil;
     return { name:h[0], g, aa, stage, time, ibu, owned:pantried(r.id,h[0]), price:HOP_PRICE.default };
@@ -267,19 +204,15 @@ function calc(r){
   const spargeWater = Math.max(0, preboil - strike + grainAbsorptionL);
   const totalWater = strike + spargeWater;
   const salts = computeSaltAdditions(r.water || FLORAVILLE_WATER, STATE.sourceWater, totalWater);
-
   const mashTemp = r.mashTemp!=null ? r.mashTemp : DEFAULT_MASH_TEMP_C;
   const grainTemp = STATE.grainTempC!=null ? STATE.grainTempC : DEFAULT_GRAIN_TEMP_C;
   const strikeTemp = mashTemp + (0.4 / eq.mashThickness) * (mashTemp - grainTemp);
   const mashVolume = strike + totalGrain * GRAIN_DISPLACEMENT_L_PER_KG;
   const spargeTemp = STATE.spargeTempC!=null ? STATE.spargeTempC : DEFAULT_SPARGE_TEMP_C;
-
   return { sf, eq, ferm, hops, totalGrain, totalHops, ibu, og, fermCost, hopCost, yeastCost, full, toBuy, saving, preboil, strike,
     grainAbsorptionL, spargeWater, totalWater, salts, mashTemp, grainTemp, strikeTemp, mashVolume, spargeTemp,
     grainOK: totalGrain <= eq.maxGrain, boilOK: preboil <= eq.maxKettle };
 }
-
-/* ---------- Salt/acid addition calculator ---------- */
 function computeSaltAdditions(target, source, totalLiquorL){
   const V = totalLiquorL > 0 ? totalLiquorL : 1;
   const deltaSO4 = Math.max(0, (target.SO4||0) - (source.SO4||0));
@@ -287,13 +220,11 @@ function computeSaltAdditions(target, source, totalLiquorL){
   const deltaMg = Math.max(0, (target.Mg||0) - (source.Mg||0));
   const deltaAlkUp = Math.max(0, (target.Alk||0) - (source.Alk||0));
   const deltaAlkDown = Math.max(0, (source.Alk||0) - (target.Alk||0));
-
   const gypsum_g = (deltaSO4 * V) / SALT_PPM_PER_GRAM.gypsum.SO4;
   const cacl2_g = (deltaCl * V) / SALT_PPM_PER_GRAM.cacl2.Cl;
   const epsom_g = (deltaMg * V) / SALT_PPM_PER_GRAM.epsom.Mg;
   const bakingsoda_g = (deltaAlkUp * V) / SALT_PPM_PER_GRAM.bakingsoda.Alk;
   const lacticAcid_mL = deltaAlkDown>0 ? (deltaAlkDown * V / 50000 * 90.08/(1.206*0.88)) : 0;
-
   const resulting = {
     Ca: (source.Ca||0) + gypsum_g*SALT_PPM_PER_GRAM.gypsum.Ca/V + cacl2_g*SALT_PPM_PER_GRAM.cacl2.Ca/V,
     Mg: (source.Mg||0) + epsom_g*SALT_PPM_PER_GRAM.epsom.Mg/V,
@@ -305,9 +236,7 @@ function computeSaltAdditions(target, source, totalLiquorL){
   return { gypsum_g, cacl2_g, epsom_g, bakingsoda_g, lacticAcid_mL, resulting, totalLiquorL: V };
 }
 
-/* ============================================================
-   TABS
-   ============================================================ */
+/* ============================================================ TABS ============================================================ */
 const TABS = [
   { id:"dashboard", label:"Dashboard", icon:"⌂", group:"BREW" },
   { id:"library", label:"Recipe Library", icon:"★", group:"BREW" },
@@ -326,10 +255,8 @@ const TABS = [
   { id:"readme", label:"Read Me", icon:"📖", group:"SETTINGS" }
 ];
 let PAGE = "dashboard";
-
 function buildNav(){
-  const groups = [];
-  TABS.forEach(t=>{ if(!groups.includes(t.group)) groups.push(t.group); });
+  const groups = []; TABS.forEach(t=>{ if(!groups.includes(t.group)) groups.push(t.group); });
   $("#nav").innerHTML = groups.map(g=>`<div class="group">${g}</div>`+
     TABS.filter(t=>t.group===g).map(t=>`<button data-p="${t.id}" class="${t.id===PAGE?'on':''}"><span class="nic">${t.icon}</span>${t.label}</button>`).join("")
   ).join("");
@@ -348,8 +275,7 @@ function render(){
 
 /* ---------- Dashboard ---------- */
 function dash(){
-  const r = selected(); STATE.selectedId = r.id;
-  const c = calc(r);
+  const r = selected(); STATE.selectedId = r.id; const c = calc(r);
   $("#app").innerHTML = `
     <div class="card hero">
       <div class="thumb big" style="cursor:pointer;" id="dashThumb">${recipeThumb(r)}</div>
@@ -386,15 +312,12 @@ function dash(){
 }
 function stat(l,v){ return `<div class="stat"><small>${l}</small><b>${v}</b></div>`; }
 function recipeOptions(){
-  const lib = allRecipes().filter(r=>!isCustom(r.id));
-  const mine = allRecipes().filter(r=>isCustom(r.id));
+  const lib = allRecipes().filter(r=>!isCustom(r.id)); const mine = allRecipes().filter(r=>isCustom(r.id));
   let h = `<optgroup label="Recipe Library">`+lib.map(r=>`<option value="${r.id}" ${r.id===STATE.selectedId?'selected':''}>${esc(r.name)}</option>`).join("")+`</optgroup>`;
   if(mine.length) h += `<optgroup label="My Recipes">`+mine.map(r=>`<option value="${r.id}" ${r.id===STATE.selectedId?'selected':''}>${esc(r.name)}</option>`).join("")+`</optgroup>`;
   return h;
 }
-function equipOptions(){
-  return allEquipment().map(e=>`<option value="${e.id}" ${e.id===STATE.equipmentId?'selected':''}>${esc(e.name)}</option>`).join("");
-}
+function equipOptions(){ return allEquipment().map(e=>`<option value="${e.id}" ${e.id===STATE.equipmentId?'selected':''}>${esc(e.name)}</option>`).join(""); }
 
 /* ---------- Recipe Library ---------- */
 function library(){
@@ -660,13 +583,9 @@ function bindOwn(r){ document.querySelectorAll("[data-own]").forEach(c=>c.onchan
 
 /* ---------- Water ---------- */
 function water(){
-  const r = selected();
-  const c = calc(r);
-  const target = r.water || FLORAVILLE_WATER;
-  const s = c.salts;
+  const r = selected(); const c = calc(r); const target = r.water || FLORAVILLE_WATER; const s = c.salts;
   $("#app").innerHTML = `
     <div class="card"><p>Recipe: <span class="calc">${esc(r.name)}</span> Batch: <span class="calc">${fmt(STATE.batchSize,1)} L</span> Equipment: <span class="calc">${esc(c.eq.name)}</span></p></div>
-
     <h2 class="sec">Mash setup</h2>
     <div class="card">
       <div class="fields">
@@ -676,31 +595,19 @@ function water(){
       </div>
     </div>
     <div class="card stats">
-      ${stat("Strike water temp", fmt(c.strikeTemp,1)+" °C")}
-      ${stat("Strike water volume", fmt(c.strike,1)+" L")}
-      ${stat("Mash tun volume", fmt(c.mashVolume,1)+" L")}
-      ${stat("Total grain", fmt(c.totalGrain,2)+" kg")}
-      ${stat("Grain absorption", fmt(c.grainAbsorptionL,1)+" L")}
+      ${stat("Strike water temp", fmt(c.strikeTemp,1)+" °C")}${stat("Strike water volume", fmt(c.strike,1)+" L")}
+      ${stat("Mash tun volume", fmt(c.mashVolume,1)+" L")}${stat("Total grain", fmt(c.totalGrain,2)+" kg")}${stat("Grain absorption", fmt(c.grainAbsorptionL,1)+" L")}
     </div>
-
     <h2 class="sec">Sparge setup</h2>
-    <div class="card">
-      <div class="fields">
-        <div class="field"><label>Sparge water temp (°C)</label><input type="number" step="0.5" id="wSpargeTemp" value="${fmt(c.spargeTemp,1)}"></div>
-      </div>
-    </div>
+    <div class="card"><div class="fields"><div class="field"><label>Sparge water temp (°C)</label><input type="number" step="0.5" id="wSpargeTemp" value="${fmt(c.spargeTemp,1)}"></div></div></div>
     <div class="card stats">
-      ${stat("Sparge water volume", fmt(c.spargeWater,1)+" L")}
-      ${stat("Total water needed", fmt(c.totalWater,1)+" L")}
-      ${stat("Pre-boil volume", fmt(c.preboil,1)+" L")}
+      ${stat("Sparge water volume", fmt(c.spargeWater,1)+" L")}${stat("Total water needed", fmt(c.totalWater,1)+" L")}${stat("Pre-boil volume", fmt(c.preboil,1)+" L")}
     </div>
-
     <h2 class="sec">Source water (edit if you have a test result)</h2>
     <div class="card">
       <p class="desc">Figures below default to Hunter Water published values for the Grahamstown / Tomago supply (covers Newcastle including Floraville).</p>
       <div class="fields">${WATER_IONS.map(i=>`<div class="field"><label>${WATER_LABELS[i]} ppm</label><input type="number" step="0.5" data-w="${i}" value="${STATE.sourceWater[i]}"></div>`).join("")}</div>
     </div>
-
     <h2 class="sec">Style target for ${esc(r.name)}</h2>
     <div class="card"><table><thead><tr><th>Ion</th><th>Source</th><th>Style target</th><th>After suggested salts</th><th>Still off by</th></tr></thead><tbody>
       ${WATER_IONS.map(i=>{
@@ -708,17 +615,16 @@ function water(){
         return `<tr><td>${WATER_LABELS[i]}</td><td>${fmt(src,1)}</td><td>${fmt(tgt,1)}</td><td><b>${fmt(after,1)}</b></td><td style="color:${Math.abs(diff)>15?'#b42318':'#19753c'}">${diff>0?'+':''}${fmt(diff,1)}</td></tr>`;
       }).join("")}
     </tbody></table></div>
-
     <h2 class="sec">Chemical (salt) additions, across ${fmt(c.totalWater,1)} L total liquor</h2>
     <div class="card">
       <table><thead><tr><th>Addition</th><th>Amount</th><th>Why</th></tr></thead><tbody>
         <tr><td>${SALT_PPM_PER_GRAM.gypsum.name}</td><td><b>${fmt(s.gypsum_g,1)} g</b></td><td class="muted">Boosts sulphate for a crisper, drier hop character</td></tr>
         <tr><td>${SALT_PPM_PER_GRAM.cacl2.name}</td><td><b>${fmt(s.cacl2_g,1)} g</b></td><td class="muted">Boosts chloride for a fuller, rounder malt character</td></tr>
-        <tr><td>${SALT_PPM_PER_GRAM.epsom.name}</td><td><b>${fmt(s.epsom_g,1)} g</b></td><td class="muted">Tops up magnesium, a yeast nutrient, only added if still short after the above</td></tr>
+        <tr><td>${SALT_PPM_PER_GRAM.epsom.name}</td><td><b>${fmt(s.epsom_g,1)} g</b></td><td class="muted">Tops up magnesium, only added if still short after the above</td></tr>
         <tr><td>${SALT_PPM_PER_GRAM.bakingsoda.name}</td><td><b>${fmt(s.bakingsoda_g,1)} g</b></td><td class="muted">Raises alkalinity, only needed for darker/roastier styles</td></tr>
-        <tr><td>88% Lactic acid</td><td><b>${fmt(s.lacticAcid_mL,2)} mL</b></td><td class="muted">${s.lacticAcid_mL>0 ? "Knocks down excess alkalinity so the mash can reach the right pH" : "Not needed, source alkalinity is already at or below target"}</td></tr>
+        <tr><td>88% Lactic acid</td><td><b>${fmt(s.lacticAcid_mL,2)} mL</b></td><td class="muted">${s.lacticAcid_mL>0 ? "Knocks down excess alkalinity" : "Not needed, source alkalinity already at/below target"}</td></tr>
       </tbody></table>
-      <div class="note">These are calculated automatically from the gap between your source water and this recipe's target profile, they recalculate whenever you change recipe, batch size, mash/sparge settings, or the source water figures above. Treat this as a starting point, not gospel, always measure actual mash pH 10 to 15 minutes after dough-in with a calibrated pH meter (aiming for roughly 5.2 to 5.6) and adjust from there.</div>
+      <div class="note">These recalculate whenever you change recipe, batch size, mash/sparge settings, or the source water figures above. Always measure actual mash pH 10 to 15 minutes after dough-in with a calibrated pH meter (aiming for roughly 5.2 to 5.6) and adjust from there.</div>
     </div>`;
   document.querySelectorAll("[data-w]").forEach(inp=>inp.onchange=()=>{STATE.sourceWater[inp.dataset.w]=+inp.value||0;save();render();});
   $("#wMashTemp").onchange = e=>{ r.mashTemp = parseFloat(e.target.value); if(isNaN(r.mashTemp)) r.mashTemp = DEFAULT_MASH_TEMP_C; if(isCustom(r.id)) save(); render(); };
@@ -737,13 +643,12 @@ function brewday(){
     </div>
     <div class="card stats">
       ${stat("Grain fit",c.grainOK?'OK':'Too much')}${stat("Kettle fit",c.boilOK?'OK':'Too much')}
-      ${stat("Gypsum",fmt(c.salts.gypsum_g,1)+" g")}${stat("Calcium chloride",fmt(c.salts.cacl2_g,1)+" g")}
-      ${stat("Lactic acid",fmt(c.salts.lacticAcid_mL,2)+" mL")}
+      ${stat("Gypsum",fmt(c.salts.gypsum_g,1)+" g")}${stat("Calcium chloride",fmt(c.salts.cacl2_g,1)+" g")}${stat("Lactic acid",fmt(c.salts.lacticAcid_mL,2)+" mL")}
     </div>
-    <div class="card"><p class="muted">Full salt breakdown (including Epsom salt and baking soda where relevant) is on the Water tab, salts are calculated automatically from this recipe's target water profile.</p></div>
+    <div class="card"><p class="muted">Full salt breakdown is on the Water tab, calculated automatically from this recipe's target water profile.</p></div>
     <h2 class="sec">Process checklist</h2>
     <div class="card"><ul class="check">
-      ${["Treat all brewing water for chlorine / chloramine","Add calculated salts to the strike and sparge water","Heat strike water and dough in","Mash 60 min at target temperature","Mash out","Sparge with the calculated sparge water to reach pre-boil volume","Boil and follow the Hops schedule","Whirlpool and stand","Chill to pitch temperature","Aerate and pitch yeast, record OG"].map(s=>`<li><label><input type="checkbox"> ${s}</label></li>`).join("")}
+      ${["Treat all brewing water for chlorine / chloramine","Add calculated salts to the strike and sparge water","Heat strike water and dough in","Mash 60 min at target temperature","Mash out","Sparge to reach pre-boil volume","Boil and follow the Hops schedule","Whirlpool and stand","Chill to pitch temperature","Aerate and pitch yeast, record OG"].map(s=>`<li><label><input type="checkbox"> ${s}</label></li>`).join("")}
     </ul></div>`;
 }
 
@@ -816,7 +721,7 @@ function supplier(){
     return { s, ing, del, label, landed:ing+del };
   }).sort((a,b)=>a.landed-b.landed);
   $("#app").innerHTML = `
-    <div class="card"><p class="desc">No AU homebrew supplier has a public price API, so this estimates a landed cost (ingredients + delivery) using researched delivery terms and a per-supplier price factor. Confirm the actual cart before ordering.</p></div>
+    <div class="card"><p class="desc">No AU homebrew supplier has a public price API, so this estimates a landed cost (ingredients + delivery). Confirm the actual cart before ordering.</p></div>
     <h2 class="sec">Ranked by landed cost for ${esc(r.name)}</h2>
     <div class="card list"><table><thead><tr><th>#</th><th>Supplier</th><th>Location</th><th>Ingredients</th><th>Delivery</th><th>Landed</th><th>Confirmed</th></tr></thead><tbody>
       ${rows.map((x,i)=>`<tr ${i===0?'style="background:#e9f6ee"':''}><td>${i+1}${i===0?' 🏆':''}</td><td><b>${esc(x.s.name)}</b></td><td class="muted">${esc(x.s.location)}</td><td>${money(x.ing)}</td><td>${x.label}</td><td><b>${money(x.landed)}</b></td><td class="${x.s.confirmed?'badge-y':'badge-n'}">${x.s.confirmed?'Y':'est.'}</td></tr>`).join("")}
@@ -825,110 +730,107 @@ function supplier(){
     <div class="card">${SUPPLIERS.map(s=>`<div style="margin-bottom:12px;border-bottom:1px solid #efeae4;padding-bottom:10px;"><b><a href="${s.url}" target="_blank">${esc(s.name)}</a></b> <span class="muted">${esc(s.location)}</span><p class="muted" style="margin:4px 0;">${esc(s.notes)}</p></div>`).join("")}</div>`;
 }
 
-/* ============================================================
-   Account & Sync — hardened login flow + safe merge sync
-   ============================================================ */
+/* ============================================================ Account & Sync — email OTP CODE flow (no clickable link) ============================================================ */
 function secondsLeftOnCooldown(){
   const last = parseInt(localStorage.getItem(OTP_COOLDOWN_KEY) || "0", 10);
   const elapsed = (Date.now() - last) / 1000;
   return Math.max(0, Math.ceil(OTP_COOLDOWN_SECONDS - elapsed));
 }
-let cooldownTimer = null;
 function account(){
-  const ready = !!sb;
-  const cooldown = secondsLeftOnCooldown();
-  const stay = localStorage.getItem(STAY_SIGNED_IN_KEY) !== "0";
+  const ready = !!sb; const cooldown = secondsLeftOnCooldown(); const stay = localStorage.getItem(STAY_SIGNED_IN_KEY) !== "0";
   $("#app").innerHTML = `
     <div class="card"><h3>Account & Sync</h3>
-      <p class="desc">Sign in with your email to back up recipes, gear, pantry, ratings and images to the cloud and use BrewGenge across devices. Give a mate a copy of the site and everyone stays completely separate, each account only ever sees its own private data. Skip this entirely and everything still works, saved in this browser only.</p>
+      <p class="desc">Sign in with your email to back up recipes, gear, pantry, ratings and images to the cloud and use BrewGenge across devices. Give a mate a copy of the site and everyone stays completely separate. Skip this entirely and everything still works, saved in this browser only.</p>
       <p>Status: <span id="syncStatusBadge" class="${USER?'badge-ok':''}">${USER?'Signed in as '+esc(USER.email):'Not signed in'}</span></p>
     </div>
-
-    ${AUTH_INIT_ERROR ? `<div class="card"><p class="warn"><b>Supabase didn't load:</b> ${esc(AUTH_INIT_ERROR)}</p><p class="muted">This usually means: (1) the Supabase project is paused (free-tier projects auto-pause after a week of inactivity, check the Supabase dashboard and click Restore), (2) an ad-blocker/privacy extension/corporate firewall blocked the request, or (3) you're offline. Local mode still works fully in the meantime.</p></div>` : ""}
-
-    ${AUTH_CALLBACK_ERROR ? `<div class="card"><p class="warn"><b>The magic link didn't work:</b> ${esc(AUTH_CALLBACK_ERROR)}</p><p class="muted">${authErrorAdvice(AUTH_CALLBACK_ERROR)}</p></div>` : ""}
-
+    ${AUTH_INIT_ERROR ? `<div class="card"><p class="warn"><b>Supabase didn't load:</b> ${esc(AUTH_INIT_ERROR)}</p><p class="muted">This usually means the Supabase project is paused (free-tier projects auto-pause after a week of inactivity), an ad-blocker/firewall blocked the request, or you're offline.</p></div>` : ""}
     ${!ready ? "" :
       USER ? `<div class="card"><div class="toolbar"><button class="btn" id="syncNow">Sync now</button><button class="btn alt" id="out">Sign out</button></div><p id="syncMsg" class="muted" style="margin-top:10px;">${esc(LAST_SYNC_MESSAGE||"")}</p></div>`
-      : `<div class="card">
-          <div class="field" style="max-width:320px;"><label>Email</label><input id="email" type="email" placeholder="you@example.com" autocomplete="email"></div><br>
-          <label class="toggle" style="margin-bottom:10px; display:flex; align-items:center; gap:8px;"><input type="checkbox" id="acctStay" ${stay?"checked":""}> Stay signed in on this device</label>
-          <button class="btn" id="signin" ${cooldown>0?'disabled':''}>${cooldown>0 ? 'Wait '+cooldown+'s to resend' : 'Send magic link'}</button>
-          <div id="msg" style="margin-top:10px;"></div>
-        </div>`}
-
-    <div class="card"><h3>Troubleshooting: nothing sends, "Load failed", or a bad/expired link</h3>
-      <p class="desc">If this fails the same way on every device and every browser (not just one phone), it is almost always one of these, checked in order:</p>
-      <ol style="margin:8px 0 0; padding-left:20px; font-size:.86rem; color:var(--muted); line-height:1.7;">
-        <li><b>Paused Supabase project.</b> Free-tier projects pause themselves after about a week with no activity. Log into supabase.com, open this project, and if it says "Paused", click Restore and wait a couple of minutes.</li>
-        <li><b>Site URL / Redirect URL mismatch.</b> <span class="pill">Authentication → URL Configuration</span> in Supabase. Both <b>Site URL</b> and <b>Redirect URLs</b> must be set to your real live URL below, not <code>localhost</code>. A mismatch here causes "invalid or expired link" even on a fresh click.</li>
-        <li><b>Rate limits.</b> Roughly one OTP email per address every 60 seconds, and a small hourly cap project-wide on the free tier.</li>
-        <li><b>Slow email.</b> Magic links expire quickly (a few minutes), open the email and click straight away.</li>
-      </ol>
-      <p class="muted" style="margin-top:10px;">Current page URL, copy this exactly into both Site URL and Redirect URLs:</p>
-      <div class="calc" style="word-break:break-all;">${esc(location.origin + location.pathname)}</div>
+      : buildAuthFormHTML(stay, cooldown, "acct")}
+    <div class="card"><h3>Why a 6-digit code instead of a clickable link?</h3>
+      <p class="desc">Corporate email systems (Microsoft Defender Safe Links and similar) automatically "visit" every link in an incoming email to scan it for malware, before you ever click it. Since sign-in links are single-use, that automatic scan silently burns the link, so by the time you click it yourself, it's already dead, with no visible error, just bounced back to the login screen. A scanner can visit a link, but it can't "use up" a plain number sitting in an email body.</p>
     </div>
-
     <div class="card"><h3>Sharing recipes with mates</h3>
-      <p class="desc">Use <b>Export Recipe Pack</b> in the Recipe Library to export all recipes, favourites, or your BrewGenge originals as one JSON file. Uploaded images are embedded and travel with the recipe. Your mate imports it and it lands in their My Recipes. This works with or without signing in, it doesn't need an account at all.</p>
+      <p class="desc">Use <b>Export Recipe Pack</b> in the Recipe Library. Works with or without signing in, no account needed at all.</p>
     </div>`;
-
   if(USER){
     $("#syncNow").onclick=async()=>{ $("#syncNow").disabled=true; await safeSyncNow(); render(); };
     $("#out").onclick=async()=>{ if(sb) await sb.auth.signOut(); USER=null; syncStatus="local"; render(); };
   } else if(ready){
-    $("#email").addEventListener("keydown", e=>{ if(e.key==="Enter" && !$("#signin").disabled) $("#signin").click(); });
-    $("#acctStay").onchange = e=>localStorage.setItem(STAY_SIGNED_IN_KEY, e.target.checked?"1":"0");
-    $("#signin").onclick=()=> attemptSendMagicLink($("#email").value, $("#msg"), $("#signin"));
-    if(cooldown>0) startCooldownCountdown($("#signin"));
+    wireAuthForm("acct");
   }
 }
-function authErrorAdvice(msg){
-  const m = (msg||"").toLowerCase();
-  if(/expired/.test(m)) return "The link had already expired, or the Site URL in Supabase still points at localhost. Request a fresh one and check the URL Configuration checklist below.";
-  if(/redirect/.test(m) || /url/.test(m)) return "This is almost always the Site URL / Redirect URL setup in your Supabase project, see the checklist below.";
-  if(/rate/.test(m) || /too many/.test(m)) return "You've requested too many links too quickly, Supabase enforces a short cooldown. Wait a minute and try again.";
-  return "See the checklist below for the most common causes.";
+function buildAuthFormHTML(stay, cooldown, prefix){
+  const showingCodeStep = !!codeStepEmail;
+  return `<div class="card">
+    ${!showingCodeStep ? `
+      <div class="field" style="max-width:320px;"><label>Email</label><input id="${prefix}Email" type="email" placeholder="you@example.com" autocomplete="email"></div><br>
+      <label class="toggle" style="margin-bottom:10px; display:flex; align-items:center; gap:8px;"><input type="checkbox" id="${prefix}Stay" ${stay?"checked":""}> Stay signed in on this device</label>
+      <button class="btn" id="${prefix}Send" ${cooldown>0?'disabled':''}>${cooldown>0 ? 'Wait '+cooldown+'s to resend' : 'Send sign-in code'}</button>
+      <div id="${prefix}Msg" style="margin-top:10px;"></div>
+    ` : `
+      <p class="desc">We've emailed a 6-digit code to <b>${esc(codeStepEmail)}</b>. Enter it below, no need to click anything in the email.</p>
+      <div class="field" style="max-width:180px;"><label>6-digit code</label><input id="${prefix}Code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" autocomplete="one-time-code"></div><br>
+      <button class="btn" id="${prefix}Verify">Verify & sign in</button>
+      <button class="btn alt" id="${prefix}BackToEmail" style="margin-left:8px;">Use a different email</button>
+      <div id="${prefix}Msg" style="margin-top:10px;"></div>
+    `}
+  </div>`;
+}
+function wireAuthForm(prefix){
+  if(codeStepEmail){
+    const codeInput = $("#"+prefix+"Code");
+    if(codeInput) codeInput.addEventListener("keydown", e=>{ if(e.key==="Enter") doVerifyCode(prefix); });
+    const verifyBtn = $("#"+prefix+"Verify"); if(verifyBtn) verifyBtn.onclick = ()=> doVerifyCode(prefix);
+    const backBtn = $("#"+prefix+"BackToEmail"); if(backBtn) backBtn.onclick = ()=>{ codeStepEmail = null; if(prefix==="acct") render(); else renderGate(true); };
+  } else {
+    const emailInput = $("#"+prefix+"Email");
+    if(emailInput) emailInput.addEventListener("keydown", e=>{ if(e.key==="Enter" && !$("#"+prefix+"Send").disabled) doSendCode(prefix); });
+    const stayInput = $("#"+prefix+"Stay"); if(stayInput) stayInput.onchange = e=>localStorage.setItem(STAY_SIGNED_IN_KEY, e.target.checked?"1":"0");
+    const sendBtn = $("#"+prefix+"Send"); if(sendBtn) sendBtn.onclick = ()=> doSendCode(prefix);
+    if(secondsLeftOnCooldown()>0 && sendBtn) startCooldownCountdown(sendBtn);
+  }
+}
+async function doSendCode(prefix){
+  const emailEl = $("#"+prefix+"Email"); const msgEl = $("#"+prefix+"Msg");
+  const email = (emailEl.value||"").trim();
+  if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ msgEl.innerHTML = `<span class="warn">Enter a valid email address.</span>`; return; }
+  if(!sb){ msgEl.innerHTML = `<span class="warn">Still connecting to Supabase. If this persists, the project may be paused, check the Supabase dashboard.</span>`; return; }
+  const cooldown = secondsLeftOnCooldown();
+  if(cooldown>0){ msgEl.innerHTML = `<span class="warn">Wait ${cooldown}s before requesting another code.</span>`; return; }
+  msgEl.innerHTML = `<span class="muted">Sending...</span>`;
+  const sendBtn = $("#"+prefix+"Send"); if(sendBtn) sendBtn.disabled = true;
+  try{
+    const { error } = await sb.auth.signInWithOtp({ email });
+    if(error){ msgEl.innerHTML = `<span class="warn">${esc(error.message)}</span>`; if(sendBtn) sendBtn.disabled = false; }
+    else { localStorage.setItem(OTP_COOLDOWN_KEY, String(Date.now())); codeStepEmail = email; if(prefix==="acct") render(); else renderGate(true); }
+  }catch(e){
+    msgEl.innerHTML = `<span class="warn">Network error contacting Supabase: ${esc(e.message)}. This usually means the Supabase project is paused or unreachable from this network.</span>`;
+    if(sendBtn) sendBtn.disabled = false;
+  }
+}
+async function doVerifyCode(prefix){
+  const codeEl = $("#"+prefix+"Code"); const msgEl = $("#"+prefix+"Msg");
+  const code = (codeEl.value||"").trim();
+  if(!/^\d{4,8}$/.test(code)){ msgEl.innerHTML = `<span class="warn">Enter the code exactly as it appears in the email.</span>`; return; }
+  if(!sb){ msgEl.innerHTML = `<span class="warn">Not connected to Supabase yet.</span>`; return; }
+  msgEl.innerHTML = `<span class="muted">Checking...</span>`;
+  try{
+    const { data, error } = await sb.auth.verifyOtp({ email: codeStepEmail, token: code, type: "email" });
+    if(error){ msgEl.innerHTML = `<span class="warn">${esc(error.message)}. Codes expire quickly, request a fresh one if needed.</span>`; return; }
+    USER = data && data.user ? data.user : (data && data.session ? data.session.user : USER);
+    localStorage.removeItem(OFFLINE_MODE_KEY); codeStepEmail = null;
+    await cloudPull(); updateSyncBadge(); renderGate(); if(PAGE==="account") render();
+  }catch(e){ msgEl.innerHTML = `<span class="warn">Network error verifying code: ${esc(e.message)}.</span>`; }
 }
 function startCooldownCountdown(btn){
   clearInterval(cooldownTimer);
   cooldownTimer = setInterval(()=>{
     const left = secondsLeftOnCooldown();
     if(!btn || !document.body.contains(btn)){ clearInterval(cooldownTimer); return; }
-    if(left<=0){ btn.disabled=false; btn.textContent="Send magic link"; clearInterval(cooldownTimer); }
+    if(left<=0){ btn.disabled=false; btn.textContent="Send sign-in code"; clearInterval(cooldownTimer); }
     else { btn.disabled=true; btn.textContent = "Wait "+left+"s to resend"; }
   }, 1000);
-}
-// Shared by both the Account & Sync tab and the login gate overlay.
-async function attemptSendMagicLink(email, msgEl, btnEl){
-  email = (email||"").trim();
-  if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
-    msgEl.innerHTML = `<span class="warn">Enter a valid email address.</span>`; return;
-  }
-  if(!sb){
-    msgEl.innerHTML = `<span class="warn">Still connecting to Supabase. If this persists, the project may be paused, check the Supabase dashboard.</span>`; return;
-  }
-  const cooldown = secondsLeftOnCooldown();
-  if(cooldown>0){ msgEl.innerHTML = `<span class="warn">Wait ${cooldown}s before requesting another link.</span>`; return; }
-  msgEl.innerHTML = `<span class="muted">Sending...</span>`;
-  if(btnEl) btnEl.disabled = true;
-  try{
-    const { error } = await sb.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: location.origin + location.pathname }
-    });
-    if(error){
-      msgEl.innerHTML = `<span class="warn">${esc(error.message)}</span>`;
-      if(btnEl) btnEl.disabled = false;
-    } else {
-      localStorage.setItem(OTP_COOLDOWN_KEY, String(Date.now()));
-      msgEl.innerHTML = `<span class="ok">Magic link sent to ${esc(email)}. Check your inbox (and spam folder) and click it quickly, it expires in a few minutes.</span>`;
-      if(btnEl) startCooldownCountdown(btnEl);
-    }
-  }catch(e){
-    msgEl.innerHTML = `<span class="warn">Network error contacting Supabase: ${esc(e.message)}. This usually means the Supabase project is paused (check the dashboard) or unreachable from this network.</span>`;
-    if(btnEl) btnEl.disabled = false;
-  }
 }
 
 /* ---------- Read Me ---------- */
@@ -937,23 +839,19 @@ function readme(){
     <div class="card"><h3>How to use BrewGenge</h3><ol>
       <li>Pick a recipe and batch size on the Dashboard, everything scales automatically.</li>
       <li>Choose your gear under Equipment, capacity checks follow it.</li>
-      <li>Click 🔍 on any recipe for the full detail popup, image, style check, live shopping list, rating and brew history.</li>
-      <li>Tick "Already have?" on Fermentables/Hops (or inside the popup) to drop pantry items from the Cost.</li>
-      <li>Water tab covers mash, sparge and salt additions, all in real litres and grams, not just ppm targets.</li>
-      <li>Brew Day and Fermentation are your live log.</li>
+      <li>Click 🔍 on any recipe for the full detail popup.</li>
+      <li>Tick "Already have?" on Fermentables/Hops to drop pantry items from the Cost.</li>
+      <li>Water tab covers mash, sparge and salt additions, all in real litres and grams.</li>
       <li>Sign in once per device (tick "Stay signed in") to safely sync everything, including images, across devices.</li>
     </ol></div>
-    <div class="card"><h3>Signing in and syncing, how it actually works now</h3>
-      <p>The first time you open BrewGenge on a new device without an existing session, a sign-in screen appears. Enter your email, tick <b>Stay signed in on this device</b> (on by default), and click Send magic link. Click the link in the email on the <b>same device</b>. After that, Supabase keeps you signed in automatically, this really is a one-off per device unless you sign out, clear browser data, or untick "Stay signed in" (which signs you out again whenever you close or background the tab, useful for a shared computer).</p>
-      <p><b>Sync is now merge-based, not overwrite-based.</b> When two devices both have recipes, BrewGenge combines them by recipe ID and keeps whichever version was edited most recently, rather than one device's empty or older library silently replacing the other's. Favourites, pantry ticks, ratings and brew history are combined the same way. The very first device to sign in uploads its library to the cloud; any later device with an empty library automatically downloads it.</p>
-      <p>If you'd rather not rely on this at all, <b>Export Recipe Pack</b> on the Recipe Library still works exactly as before and needs no account, useful as a manual backup or for handing a recipe to a mate.</p>
+    <div class="card"><h3>Signing in: a typed code, not a clickable link</h3>
+      <p>Enter your email, tick <b>Stay signed in on this device</b>, click <b>Send sign-in code</b>. BrewGenge emails a 6-digit code, type it in and click <b>Verify & sign in</b>. There is nothing to click in the email itself.</p>
+      <p>This is deliberate: clickable "magic link" emails are frequently opened automatically by corporate email security scanners (Microsoft Defender Safe Links and similar) before you ever see them, silently burning the single-use link. A typed code can't be consumed that way.</p>
+      <p><b>Sync is merge-based, not overwrite-based.</b> When two devices both have recipes, BrewGenge combines them by recipe ID and keeps whichever version was edited most recently.</p>
     </div>
     <div class="card"><h3>Sharing recipe packs</h3>
-      <p>Recipe Library → Export Recipe Pack. Choose all recipes, favourites, or BrewGenge originals. Uploaded images are embedded as Base64 inside the JSON and import with the recipe. Single recipes can be exported with the ⬇ icon on each row.</p>
-      <div class="note"><b>No additional SQL is required for recipe packs or for signing in.</b> They work entirely in the browser (packs) or against the single existing sync table (sign-in). A future "BrewGenge Community" feature, live recipe sharing between different accounts, would need a new Supabase migration. Simple export/import already covers "share with a mate" without needing that.</div>
-    </div>
-    <div class="card"><h3>Custom logo and recipe photos</h3>
-      <p>The BrewGenge crest and every recipe icon are built-in vector art, so nothing is ever a broken image. To use your own logo: add a file to <code>img/logo.jpeg</code> (or <code>.jpg</code> / <code>.png</code>) in your repo, lowercase filename exactly. GitHub Pages is case-sensitive, so <code>Logo.JPEG</code> will NOT match <code>logo.jpeg</code>.</p>
+      <p>Recipe Library → Export Recipe Pack. Uploaded images are embedded as Base64 inside the JSON and import with the recipe.</p>
+      <div class="note"><b>No additional SQL is required for recipe packs or for signing in.</b></div>
     </div>
     <div class="card"><h3>Hosting on GitHub Pages</h3><ol>
       <li>Upload <code>index.html</code>, <code>css</code>, <code>js</code>, <code>img</code> and <code>supabase</code> to the repo root.</li>
@@ -962,15 +860,11 @@ function readme(){
     </ol></div>`;
 }
 
-/* ============================================================
-   Recipe Detail Modal (Brewfather / Grainfather style popup)
-   ============================================================ */
+/* ============================================================ Recipe Detail Modal ============================================================ */
 function openRecipeModal(id){
   STATE.selectedId = id; save();
   document.querySelectorAll(".recipe-modal-backdrop").forEach(m=>m.remove());
-  const backdrop = document.createElement("div");
-  backdrop.className = "recipe-modal-backdrop";
-  backdrop.id = "recipeModalBackdrop";
+  const backdrop = document.createElement("div"); backdrop.className = "recipe-modal-backdrop"; backdrop.id = "recipeModalBackdrop";
   document.body.appendChild(backdrop);
   refreshRecipeModal(id);
   document.addEventListener("keydown", modalEscHandler);
@@ -979,22 +873,14 @@ function openRecipeModal(id){
 function modalEscHandler(e){ if(e.key==="Escape") closeRecipeModal(); }
 function closeRecipeModal(){
   document.removeEventListener("keydown", modalEscHandler);
-  const b = document.getElementById("recipeModalBackdrop");
-  if(b) b.remove();
+  const b = document.getElementById("recipeModalBackdrop"); if(b) b.remove();
   if(PAGE==="library" || PAGE==="dashboard") render();
 }
 function refreshRecipeModal(id){
-  const backdrop = document.getElementById("recipeModalBackdrop");
-  if(!backdrop) return;
-  const r = allRecipes().find(x=>x.id===id);
-  if(!r){ closeRecipeModal(); return; }
-  const c = calc(r);
-  const custom = isCustom(r.id);
-  const guideline = findStyleGuideline(r.style);
-  const color = estimateColorEBC(r);
-  const rating = getRating(r.id);
-  const sessions = getSessions(r.id);
-
+  const backdrop = document.getElementById("recipeModalBackdrop"); if(!backdrop) return;
+  const r = allRecipes().find(x=>x.id===id); if(!r){ closeRecipeModal(); return; }
+  const c = calc(r); const custom = isCustom(r.id); const guideline = findStyleGuideline(r.style);
+  const color = estimateColorEBC(r); const rating = getRating(r.id); const sessions = getSessions(r.id);
   backdrop.innerHTML = `
     <div class="recipe-modal-box">
       <div class="rm-header">
@@ -1009,41 +895,32 @@ function refreshRecipeModal(id){
       </div>
       <div class="rm-body">
         <div class="rm-top">
-          <div class="rm-thumb-wrap" id="rmThumbWrap">
-            <div class="thumb big">${recipeThumb(r)}</div>
-          </div>
+          <div class="rm-thumb-wrap" id="rmThumbWrap"><div class="thumb big">${recipeThumb(r)}</div></div>
           <input type="file" id="rmImgFile" accept="image/*" hidden>
           <div class="rm-topinfo">
             <div class="pill">${esc(r.style)||'Uncategorised'}</div>
-            <div class="rm-stars">
-              ${[1,2,3,4,5].map(n=>`<button data-star="${n}" class="${n<=rating?'on':''}">★</button>`).join("")}
-            </div>
+            <div class="rm-stars">${[1,2,3,4,5].map(n=>`<button data-star="${n}" class="${n<=rating?'on':''}">★</button>`).join("")}</div>
             <p class="desc">${esc(r.desc||"")}</p>
             ${r.capacityWarning ? `<div class="note">${esc(r.capacityWarning)}</div>` : ""}
           </div>
         </div>
-
         <h2 class="sec">Batch setup</h2>
         <div class="toolbar">
           <div class="field"><label>Batch into fermenter (L)</label><input type="number" step="0.5" id="rmBatch" value="${STATE.batchSize}"></div>
           <div class="field"><label>Equipment</label><select id="rmEq">${equipOptions()}</select></div>
           <div class="field"><label>Scale</label><span class="calc">${fmt(c.sf,2)}x</span></div>
         </div>
-
         <h2 class="sec">Vitals</h2>
         <div class="stats">
           ${stat("OG", fmt(r.og,3))}${stat("FG", fmt(r.fg,3))}${stat("ABV", fmt(r.abv,1)+"%")}${stat("IBU", fmt(c.ibu,0))}
           ${stat("Colour", `<span class="rm-colorswatch" style="background:${color.hex}"></span>${fmt(color.ebc,0)} EBC`)}
         </div>
-
-        ${guideline ? buildGuidelinePanel(r, guideline) : `<div class="card"><p class="muted">No typical style range on file for "${esc(r.style)}", vitals shown above only.</p></div>`}
-
+        ${guideline ? buildGuidelinePanel(r, guideline) : `<div class="card"><p class="muted">No typical style range on file for "${esc(r.style)}".</p></div>`}
         <h2 class="sec">${esc(c.eq.name)} capacity</h2>
         <div class="card">
           <p>Grain fits mash tun (max ${c.eq.maxGrain} kg)? <span class="${c.grainOK?'badge-ok':'badge-warn'}">${c.grainOK?'OK':'TOO MUCH GRAIN'}</span></p>
           <p>Pre-boil fits kettle (max ${c.eq.maxKettle} L)? <span class="${c.boilOK?'badge-ok':'badge-warn'}">${c.boilOK?'OK':'TOO MUCH LIQUID'}</span></p>
         </div>
-
         <h2 class="sec">Shopping list</h2>
         <div class="card"><table><thead><tr><th>Already have?</th><th>Ingredient</th><th>Amount</th><th>Cost</th></tr></thead><tbody>
           ${c.ferm.map(f=>`<tr class="rm-shoprow ${f.owned?'owned':''}"><td><input type="checkbox" data-rmown="${esc(f.name)}" ${f.owned?'checked':''}></td><td>${esc(f.name)}</td><td>${fmt(f.kg,2)} kg</td><td>${f.owned?`<span class="strike">${money(f.kg*f.price)}</span>$0.00`:money(f.kg*f.price)}</td></tr>`).join("")}
@@ -1051,13 +928,12 @@ function refreshRecipeModal(id){
           <tr><td></td><td>Yeast: ${esc(r.yeast)} (${r.yeastForm})</td><td></td><td>${money(c.yeastCost)}</td></tr>
           <tr class="total"><td></td><td>Total to buy</td><td></td><td>${money(c.toBuy)}</td></tr>
         </tbody></table></div>
-
         <h2 class="sec">Brew history</h2>
         <div class="card">
           <div class="fields">
             <div class="field"><label>Actual OG</label><input type="number" step="0.001" id="rmSessOG" placeholder="1.052"></div>
             <div class="field"><label>Actual FG</label><input type="number" step="0.001" id="rmSessFG" placeholder="1.011"></div>
-            <div class="field"><label>Notes</label><input type="text" id="rmSessNotes" placeholder="Tasting notes, tweaks for next time..."></div>
+            <div class="field"><label>Notes</label><input type="text" id="rmSessNotes" placeholder="Tasting notes..."></div>
           </div>
           <br><button class="btn alt" id="rmAddSess">+ Log this brew</button>
           ${sessions.length ? `<table style="margin-top:14px;"><thead><tr><th>Date</th><th>OG</th><th>FG</th><th>ABV</th><th>Notes</th><th></th></tr></thead><tbody>
@@ -1065,11 +941,10 @@ function refreshRecipeModal(id){
               const abv = (s.og && s.fg) ? ((s.og-s.fg)*131.25).toFixed(1)+"%" : "-";
               return `<tr><td class="muted">${fmtDateTime(s.date)}</td><td>${s.og?fmt(s.og,3):'-'}</td><td>${s.fg?fmt(s.fg,3):'-'}</td><td>${abv}</td><td>${esc(s.notes||"")}</td><td><button class="iconbtn danger" data-delsess="${s.id}">🗑</button></td></tr>`;
             }).join("")}
-          </tbody></table>` : `<p class="muted" style="margin-top:10px;">No brews logged yet, add your first one above once it's in the fermenter.</p>`}
+          </tbody></table>` : `<p class="muted" style="margin-top:10px;">No brews logged yet.</p>`}
         </div>
-
-        ${custom ? `<h2 class="sec">Edit ingredients</h2><div class="card"><button class="btn alt" id="rmEditBtn">✎ Open full editor (Create a Brew)</button></div>` :
-          `<h2 class="sec">Want to tweak this one?</h2><div class="card"><p class="desc">This is a Recipe Library original. Duplicate it first (⧉ above) to get your own editable BrewGenge copy.</p></div>`}
+        ${custom ? `<h2 class="sec">Edit ingredients</h2><div class="card"><button class="btn alt" id="rmEditBtn">✎ Open full editor</button></div>` :
+          `<h2 class="sec">Want to tweak this one?</h2><div class="card"><p class="desc">Duplicate it first (⧉ above) to get your own editable BrewGenge copy.</p></div>`}
       </div>
       <div class="rm-footer">
         <button class="btn big" id="rmBrewBtn">🍺 Brew This</button>
@@ -1078,56 +953,37 @@ function refreshRecipeModal(id){
         <button class="btn alt" id="rmCloseBtn2">Close</button>
       </div>
     </div>`;
-
-  $("#rmCloseBtn").onclick = closeRecipeModal;
-  $("#rmCloseBtn2").onclick = closeRecipeModal;
+  $("#rmCloseBtn").onclick = closeRecipeModal; $("#rmCloseBtn2").onclick = closeRecipeModal;
   $("#rmBrewBtn").onclick = ()=>{ STATE.selectedId=r.id; save(); closeRecipeModal(); PAGE="dashboard"; render(); };
   $("#rmFavBtn").onclick = ()=>{ toggleFav(r.id); refreshRecipeModal(r.id); };
-
   $("#rmNameInput").onchange = e=>{ renameRecipe(r.id, e.target.value); };
   $("#rmThumbWrap").onclick = ()=> $("#rmImgFile").click();
   $("#rmImgFile").onchange = e=> resizeImg(e.target.files[0], url=>{ setImage(r.id, url); refreshRecipeModal(r.id); });
-
   document.querySelectorAll("[data-star]").forEach(b=>b.onclick=()=>{ setRating(r.id, +b.dataset.star); refreshRecipeModal(r.id); });
-
   $("#rmBatch").onchange = e=>{ STATE.batchSize = parseFloat(e.target.value)||40; save(); refreshRecipeModal(r.id); };
   $("#rmEq").onchange = e=>{ STATE.equipmentId = e.target.value; save(); refreshRecipeModal(r.id); };
-
   document.querySelectorAll("[data-rmown]").forEach(cb=>cb.onchange=()=>{ togglePantry(r.id, cb.dataset.rmown, cb.checked); refreshRecipeModal(r.id); });
-
   $("#rmAddSess").onclick = ()=>{
-    const og = parseFloat($("#rmSessOG").value) || null;
-    const fg = parseFloat($("#rmSessFG").value) || null;
-    const notes = $("#rmSessNotes").value.trim();
-    addSession(r.id, { og, fg, notes });
-    refreshRecipeModal(r.id);
+    const og = parseFloat($("#rmSessOG").value) || null; const fg = parseFloat($("#rmSessFG").value) || null; const notes = $("#rmSessNotes").value.trim();
+    addSession(r.id, { og, fg, notes }); refreshRecipeModal(r.id);
   };
   document.querySelectorAll("[data-delsess]").forEach(b=>b.onclick=()=>{ deleteSession(r.id, b.dataset.delsess); refreshRecipeModal(r.id); });
-
   $("#rmDupBtn").onclick = ()=>{ const c2 = cloneRecipe(r); const newId = saveRecipe(c2); openRecipeModal(newId); };
   $("#rmExportBtn").onclick = ()=> exportSingle(r);
   $("#rmShareBtn").onclick = async ()=>{
     const text = `${r.name}\n${r.style} · ${fmt(r.abv,1)}% ABV · ${fmt(r.ibu,0)} IBU\n${r.desc||""}\n\nMade with BrewGenge.`;
-    if(navigator.share){
-      try{ await navigator.share({ title:r.name, text }); }catch(e){ /* user cancelled, ignore */ }
-    } else if(navigator.clipboard){
-      await navigator.clipboard.writeText(text);
-      alert("Recipe summary copied to clipboard, paste it anywhere to share.");
-    } else {
-      alert(text);
-    }
+    if(navigator.share){ try{ await navigator.share({ title:r.name, text }); }catch(e){} }
+    else if(navigator.clipboard){ await navigator.clipboard.writeText(text); alert("Recipe summary copied to clipboard."); }
+    else { alert(text); }
   };
   $("#rmDelBtn").onclick = ()=>{
-    const msg = custom ? "Delete this BrewGenge recipe permanently?" : "Hide this library recipe? You can restore it any time from the Recipe Library.";
+    const msg = custom ? "Delete this BrewGenge recipe permanently?" : "Hide this library recipe? You can restore it any time.";
     if(confirm(msg)){ deleteRecipe(r.id); closeRecipeModal(); }
   };
-  const editBtn = $("#rmEditBtn");
-  if(editBtn) editBtn.onclick = ()=>{ STATE.draftRecipe = JSON.parse(JSON.stringify(r)); save(); closeRecipeModal(); PAGE="create"; render(); };
+  const editBtn = $("#rmEditBtn"); if(editBtn) editBtn.onclick = ()=>{ STATE.draftRecipe = JSON.parse(JSON.stringify(r)); save(); closeRecipeModal(); PAGE="create"; render(); };
 }
 function buildGuidelinePanel(r, g){
-  const rows = [
-    ["OG", r.og, g.og], ["FG", r.fg, g.fg], ["ABV %", r.abv, g.abv], ["IBU", r.ibu, g.ibu]
-  ];
+  const rows = [ ["OG", r.og, g.og], ["FG", r.fg, g.fg], ["ABV %", r.abv, g.abv], ["IBU", r.ibu, g.ibu] ];
   return `<h2 class="sec">How this compares to style</h2>
     <div class="card"><table class="gl-table"><thead><tr><th>Metric</th><th>This recipe</th><th>Typical range</th><th>In style?</th></tr></thead><tbody>
       ${rows.map(([label, val, range])=>{
@@ -1137,9 +993,7 @@ function buildGuidelinePanel(r, g){
     </tbody></table></div>`;
 }
 
-/* ============================================================
-   Image resize helper
-   ============================================================ */
+/* ============================================================ Image resize helper ============================================================ */
 function resizeImg(file, cb){
   if(!file) return;
   const rd=new FileReader();
@@ -1153,20 +1007,12 @@ function resizeImg(file, cb){
   rd.readAsDataURL(file);
 }
 
-/* ============================================================
-   Recipe import normalisation
-   ============================================================ */
+/* ============================================================ Recipe import normalisation ============================================================ */
 function normalizeWaterObject(w){
   if(!w || typeof w !== "object") return null;
   const pick = (...keys) => { for(const k of keys){ if(w[k]!=null && !isNaN(w[k])) return +w[k]; } return null; };
-  const out = {
-    Ca: pick("Ca","calcium","Calcium"),
-    Mg: pick("Mg","magnesium","Magnesium"),
-    Na: pick("Na","sodium","Sodium"),
-    SO4: pick("SO4","sulfate","sulphate","Sulfate","Sulphate"),
-    Cl: pick("Cl","chloride","Chloride"),
-    Alk: pick("Alk","alkalinity","Alkalinity")
-  };
+  const out = { Ca: pick("Ca","calcium","Calcium"), Mg: pick("Mg","magnesium","Magnesium"), Na: pick("Na","sodium","Sodium"),
+    SO4: pick("SO4","sulfate","sulphate","Sulfate","Sulphate"), Cl: pick("Cl","chloride","Chloride"), Alk: pick("Alk","alkalinity","Alkalinity") };
   const hasAny = Object.values(out).some(v => v!=null);
   if(!hasAny) return null;
   WATER_IONS.forEach(ion => { if(out[ion]==null) out[ion] = FLORAVILLE_WATER[ion]; });
@@ -1181,26 +1027,17 @@ function extractRecipeList(o){
 }
 function normalizeRecipe(raw){
   if(!raw || typeof raw !== "object") return null;
-
   const hasNativeFerm = Array.isArray(raw.ferm) && raw.ferm.length && Array.isArray(raw.ferm[0]);
   const hasNativeHops = Array.isArray(raw.hops) && raw.hops.length && Array.isArray(raw.hops[0]);
   if(hasNativeFerm || hasNativeHops){
-    return {
-      id:null, custom:true,
-      name: raw.name || "Imported Brew",
-      style: raw.style || "",
-      baseBatch: raw.baseBatch || raw.batchSizeL || 40,
+    return { id:null, custom:true, name: raw.name || "Imported Brew", style: raw.style || "", baseBatch: raw.baseBatch || raw.batchSizeL || 40,
       og: raw.og || 1.05, fg: raw.fg || 1.01, abv: raw.abv || 5, ibu: raw.ibu || 30,
       yeast: raw.yeast || "US-05", yeastForm: raw.yeastForm || "Dry", atten: raw.atten || 0.78,
-      tempLo: raw.tempLo || 18, tempHi: raw.tempHi || 20,
-      desc: raw.desc || raw.description || "",
-      image: raw.image || null,
+      tempLo: raw.tempLo || 18, tempHi: raw.tempHi || 20, desc: raw.desc || raw.description || "", image: raw.image || null,
       ferm: (hasNativeFerm && raw.ferm.length) ? raw.ferm : [["Pale Ale Malt",8,4.85]],
       hops: (hasNativeHops && raw.hops.length) ? raw.hops : [["Cascade",20,7.5,"Boil",60]],
-      water: (raw.water && typeof raw.water==="object") ? Object.assign({}, raw.water) : defaultWaterForStyle(raw.style)
-    };
+      water: (raw.water && typeof raw.water==="object") ? Object.assign({}, raw.water) : defaultWaterForStyle(raw.style) };
   }
-
   const fermSrc = Array.isArray(raw.fermentables) ? raw.fermentables : null;
   const hopSrcObjects = Array.isArray(raw.hops) && raw.hops.length && typeof raw.hops[0] === "object" && !Array.isArray(raw.hops[0]) ? raw.hops : null;
   if(fermSrc || hopSrcObjects){
@@ -1213,9 +1050,7 @@ function normalizeRecipe(raw){
       const g = h.amountG!=null ? h.amountG : (h.amountKg!=null ? h.amountKg*1000 : (h.amount!=null?h.amount:20));
       const aa = h.alphaAcidPercent!=null ? h.alphaAcidPercent : (h.aa!=null ? h.aa : 10);
       const useStr = (h.use||h.stage||"boil").toString().toLowerCase();
-      let stage = "Boil";
-      if(/whirlpool|flameout|hopstand/.test(useStr)) stage = "Whirlpool";
-      else if(/dry/.test(useStr)) stage = "Dry Hop";
+      let stage = "Boil"; if(/whirlpool|flameout|hopstand/.test(useStr)) stage = "Whirlpool"; else if(/dry/.test(useStr)) stage = "Dry Hop";
       const time = stage==="Dry Hop" ? 0 : (h.timeMin!=null ? h.timeMin : (h.time!=null ? h.time : 60));
       return [ h.name || "Hop", g, aa, stage, time ];
     });
@@ -1223,10 +1058,7 @@ function normalizeRecipe(raw){
     if(Array.isArray(raw.yeast) && raw.yeast.length){
       yeastName = raw.yeast.map(y=>y.name).filter(Boolean).join(" / ") || yeastName;
       const y0 = raw.yeast[0];
-      if(y0){
-        if(y0.form) yeastForm = /liquid/i.test(y0.form) ? "Liquid" : "Dry";
-        if(y0.pitchTempC!=null){ tempLo = y0.pitchTempC; tempHi = y0.pitchTempC+2; }
-      }
+      if(y0){ if(y0.form) yeastForm = /liquid/i.test(y0.form) ? "Liquid" : "Dry"; if(y0.pitchTempC!=null){ tempLo = y0.pitchTempC; tempHi = y0.pitchTempC+2; } }
     } else if(typeof raw.yeast === "string" && raw.yeast.trim()){ yeastName = raw.yeast; }
     if(Array.isArray(raw.fermentationSteps)){
       const primary = raw.fermentationSteps.find(s=>/primary/i.test(s.name||""));
@@ -1236,29 +1068,17 @@ function normalizeRecipe(raw){
     const fg = targets.fg!=null?targets.fg:(raw.fg!=null?raw.fg:1.01);
     const abv = targets.abvPercent!=null?targets.abvPercent:(targets.abv!=null?targets.abv:(raw.abv!=null?raw.abv:Math.round((og-fg)*131.25*10)/10));
     const ibu = targets.ibu!=null?targets.ibu:(raw.ibu!=null?raw.ibu:30);
-    const atten = (og>1 && fg>1 && og>fg) ? Math.round(((og-fg)/(og-1))*1000)/1000 : 0.78;
     if(ferm.length===0 && hops.length===0) return null;
-    return {
-      id:null, custom:true,
-      name: raw.name || "Imported Brew",
-      style: raw.style || "",
-      baseBatch: raw.batchSizeL || raw.baseBatch || 40,
-      og, fg, abv, ibu,
-      yeast: yeastName, yeastForm, atten, tempLo, tempHi,
-      desc: raw.description || raw.desc || (Array.isArray(raw.brewDayNotes)?raw.brewDayNotes.join(" "):"") || "",
-      image: raw.image || null,
-      ferm: ferm.length ? ferm : [["Pale Ale Malt",8,4.85]],
-      hops: hops.length ? hops : [["Cascade",20,7.5,"Boil",60]],
-      water: normalizeWaterObject(raw.water) || defaultWaterForStyle(raw.style)
-    };
+    return { id:null, custom:true, name: raw.name || "Imported Brew", style: raw.style || "", baseBatch: raw.batchSizeL || raw.baseBatch || 40,
+      og, fg, abv, ibu, yeast: yeastName, yeastForm, atten: (og>1 && fg>1 && og>fg) ? Math.round(((og-fg)/(og-1))*1000)/1000 : 0.78, tempLo, tempHi,
+      desc: raw.description || raw.desc || (Array.isArray(raw.brewDayNotes)?raw.brewDayNotes.join(" "):"") || "", image: raw.image || null,
+      ferm: ferm.length ? ferm : [["Pale Ale Malt",8,4.85]], hops: hops.length ? hops : [["Cascade",20,7.5,"Boil",60]],
+      water: normalizeWaterObject(raw.water) || defaultWaterForStyle(raw.style) };
   }
-
   return null;
 }
 
-/* ============================================================
-   Export / import recipe packs
-   ============================================================ */
+/* ============================================================ Export / import recipe packs ============================================================ */
 function downloadJSON(obj, name){
   const a=document.createElement("a");
   a.href=URL.createObjectURL(new Blob([JSON.stringify(obj,null,2)],{type:"application/json"}));
@@ -1271,7 +1091,7 @@ function exportSingle(r){
 function packModal(){
   const m=document.createElement("div"); m.className="modal";
   m.innerHTML=`<div class="modalbox"><h3>Export Recipe Pack</h3>
-    <p class="muted">Uploaded images are embedded inside the JSON, so artwork and photos travel with the pack.</p>
+    <p class="muted">Uploaded images are embedded inside the JSON.</p>
     <div class="packgrid">
       <label class="choice"><input type="radio" name="sc" value="all" checked><b>All recipes</b>Everything in your library</label>
       <label class="choice"><input type="radio" name="sc" value="fav"><b>Favourites</b>Only starred recipes</label>
@@ -1301,53 +1121,31 @@ function importJSON(e){
     try{ o=JSON.parse(rd.result); }
     catch(err){ alert("That file isn't valid JSON ("+err.message+")."); e.target.value=""; return; }
     const list = extractRecipeList(o);
-    if(!list || !list.length){ alert("Couldn't find any recipes in that file. Expected a BrewGenge pack, a single BrewGenge recipe, or a recipe with fermentables/hops."); e.target.value=""; return; }
+    if(!list || !list.length){ alert("Couldn't find any recipes in that file."); e.target.value=""; return; }
     let ok=0, fail=0, anyImage=false;
     list.forEach(raw=>{
       const norm = normalizeRecipe(raw);
       if(!norm){ fail++; return; }
       if(norm.image) anyImage=true;
-      saveRecipe(norm);
-      ok++;
+      saveRecipe(norm); ok++;
     });
-    if(ok===0){ alert("None of the recipes in that file could be read, no fermentables or hops were found in a recognised format."); }
+    if(ok===0){ alert("None of the recipes in that file could be read."); }
     else{
       let msg = `Imported ${ok} recipe${ok===1?'':'s'}`;
-      if(fail>0) msg += `, ${fail} skipped (unrecognised format)`;
+      if(fail>0) msg += `, ${fail} skipped`;
       if(anyImage) msg += ", including embedded images";
-      msg += ".";
-      alert(msg);
-      render();
+      msg += "."; alert(msg); render();
     }
     e.target.value="";
   };
   rd.readAsText(f);
 }
 
-/* ============================================================
-   SAFE MERGE SYNC
-   ------------------------------------------------------------
-   Previously, cloudPull() overwrote local state wholesale with
-   whatever was in the cloud, and cloudPush() overwrote the cloud
-   record wholesale with local state. Either direction could wipe
-   out recipes/images that only existed on the *other* side (e.g.
-   signing in on a second phone before it had ever synced would
-   push its empty library over the top of a populated cloud copy).
-   Every sync operation below now reads the current cloud row
-   first, merges it with local state by recipe ID (keeping
-   whichever version was edited most recently), and only then
-   writes the merged result back. An empty side can never erase
-   a populated side.
-   ============================================================ */
-let LAST_SYNC_MESSAGE = "";
+/* ============================================================ SAFE MERGE SYNC ============================================================ */
 function tsOf(obj){ return Date.parse(obj && (obj.updatedAt||obj.createdAt) || 0) || 0; }
 function mergeArrayById(a, b){
   const map = new Map();
-  [...(a||[]), ...(b||[])].forEach(item=>{
-    if(!item || !item.id) return;
-    const existing = map.get(item.id);
-    if(!existing || tsOf(item) >= tsOf(existing)) map.set(item.id, item);
-  });
+  [...(a||[]), ...(b||[])].forEach(item=>{ if(!item || !item.id) return; const existing = map.get(item.id); if(!existing || tsOf(item) >= tsOf(existing)) map.set(item.id, item); });
   return [...map.values()];
 }
 function mergeSessionsById(a, b){
@@ -1356,43 +1154,30 @@ function mergeSessionsById(a, b){
   return [...map.values()];
 }
 function mergeStates(local, cloud){
-  if(!cloud) return local;
-  if(!local) return cloud;
+  if(!cloud) return local; if(!local) return cloud;
   const cloudNewer = (Date.parse(cloud.lastActivityAt||0)||0) >= (Date.parse(local.lastActivityAt||0)||0);
   const scalarSource = cloudNewer ? cloud : local;
   const base = merge(defaults(), cloud);
-
   base.myRecipes = mergeArrayById(cloud.myRecipes, local.myRecipes);
   base.myEquipment = mergeArrayById(cloud.myEquipment, local.myEquipment);
   base.favourites = [...new Set([...(cloud.favourites||[]), ...(local.favourites||[])])];
   base.hidden = [...new Set([...(cloud.hidden||[]), ...(local.hidden||[])])];
   base.overrides = Object.assign({}, cloud.overrides||{}, local.overrides||{});
   base.ratings = Object.assign({}, cloud.ratings||{}, local.ratings||{});
-
   const pantryKeys = new Set([...Object.keys(cloud.pantry||{}), ...Object.keys(local.pantry||{})]);
-  base.pantry = {};
-  pantryKeys.forEach(k=>{ base.pantry[k] = Object.assign({}, (cloud.pantry||{})[k]||{}, (local.pantry||{})[k]||{}); });
-
+  base.pantry = {}; pantryKeys.forEach(k=>{ base.pantry[k] = Object.assign({}, (cloud.pantry||{})[k]||{}, (local.pantry||{})[k]||{}); });
   const sessKeys = new Set([...Object.keys(cloud.brewSessions||{}), ...Object.keys(local.brewSessions||{})]);
-  base.brewSessions = {};
-  sessKeys.forEach(k=>{ base.brewSessions[k] = mergeSessionsById((cloud.brewSessions||{})[k], (local.brewSessions||{})[k]); });
-
-  ["selectedId","batchSize","equipmentId","sourceWater","grainTempC","spargeTempC","efficiency","fermLog"].forEach(k=>{
-    if(scalarSource[k] !== undefined) base[k] = scalarSource[k];
-  });
+  base.brewSessions = {}; sessKeys.forEach(k=>{ base.brewSessions[k] = mergeSessionsById((cloud.brewSessions||{})[k], (local.brewSessions||{})[k]); });
+  ["selectedId","batchSize","equipmentId","sourceWater","grainTempC","spargeTempC","efficiency","fermLog"].forEach(k=>{ if(scalarSource[k] !== undefined) base[k] = scalarSource[k]; });
   base.lastActivityAt = new Date().toISOString();
   return base;
 }
 async function fetchCloudRow(){
   const { data, error } = await sb.from("user_app_state").select("state").eq("user_id", USER.id).maybeSingle();
-  if(error) throw error;
-  return data ? data.state : null;
+  if(error) throw error; return data ? data.state : null;
 }
 async function writeCloudRow(state){
-  const { error } = await sb.from("user_app_state").upsert(
-    { user_id: USER.id, state, updated_at: new Date().toISOString() },
-    { onConflict: "user_id" }
-  );
+  const { error } = await sb.from("user_app_state").upsert({ user_id: USER.id, state, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
   if(error) throw error;
 }
 async function safeSyncNow(){
@@ -1402,10 +1187,8 @@ async function safeSyncNow(){
     const cloud = await fetchCloudRow();
     const localHad = (STATE.myRecipes||[]).length;
     const cloudHad = cloud ? (cloud.myRecipes||[]).length : 0;
-    if(!cloud){
-      await writeCloudRow(STATE);
-      LAST_SYNC_MESSAGE = `${localHad} local recipe(s) uploaded to BrewGenge Cloud.`;
-    } else {
+    if(!cloud){ await writeCloudRow(STATE); LAST_SYNC_MESSAGE = `${localHad} local recipe(s) uploaded to BrewGenge Cloud.`; }
+    else {
       STATE = mergeStates(STATE, cloud);
       repairWaterlessCustomRecipes(STATE);
       localStorage.setItem(STORE, JSON.stringify(STATE));
@@ -1416,11 +1199,7 @@ async function safeSyncNow(){
       else LAST_SYNC_MESSAGE = `Libraries merged safely, ${mergedHad} BrewGenge recipe(s) available.`;
     }
     syncStatus = "synced";
-  }catch(e){
-    console.warn("safeSyncNow failed", e);
-    syncStatus = "error";
-    LAST_SYNC_MESSAGE = "Sync failed: " + (e.message||e);
-  }
+  }catch(e){ console.warn("safeSyncNow failed", e); syncStatus = "error"; LAST_SYNC_MESSAGE = "Sync failed: " + (e.message||e); }
   updateSyncBadge();
 }
 function cloudPush(force){
@@ -1428,10 +1207,7 @@ function cloudPush(force){
   clearTimeout(syncTimer);
   syncTimer = setTimeout(()=>{ safeSyncNow(); }, force?0:900);
 }
-async function cloudPull(){
-  await safeSyncNow();
-  render();
-}
+async function cloudPull(){ await safeSyncNow(); render(); }
 function updateSyncBadge(){
   const el=$("#sync"); if(!el) return;
   const map={ local:["","Local mode"], syncing:["online","Syncing..."], synced:["online","Synced · "+(USER?USER.email:"")], error:["error","Sync error"] };
@@ -1440,61 +1216,34 @@ function updateSyncBadge(){
   const b=$("#syncStatusBadge"); if(b){ b.className=USER?"badge-ok":""; b.textContent=USER?("Signed in as "+USER.email):"Not signed in"; }
 }
 
-/* ============================================================
-   LOGIN GATE (cover page shown until signed in or "continue offline")
-   ============================================================ */
-function shouldShowGate(){
-  if(USER) return false;
-  if(localStorage.getItem(OFFLINE_MODE_KEY) === "1") return false;
-  return true;
-}
-function renderGate(){
-  if(!shouldShowGate()){ removeGate(); return; }
-  if(document.getElementById("bgGate")) return;
-  const stay = localStorage.getItem(STAY_SIGNED_IN_KEY) !== "0";
-  const gate = document.createElement("div");
-  gate.id = "bgGate";
-  gate.className = "bg-gate";
+/* ============================================================ LOGIN GATE ============================================================ */
+function shouldShowGate(){ if(USER) return false; if(localStorage.getItem(OFFLINE_MODE_KEY) === "1") return false; return true; }
+function renderGate(forceShow){
+  if(!forceShow && !shouldShowGate()){ removeGate(); return; }
+  if(forceShow && USER){ removeGate(); return; }
+  let gate = document.getElementById("bgGate");
+  const stay = localStorage.getItem(STAY_SIGNED_IN_KEY) !== "0"; const cooldown = secondsLeftOnCooldown();
+  if(!gate){ gate = document.createElement("div"); gate.id = "bgGate"; gate.className = "bg-gate"; document.body.appendChild(gate); }
   gate.innerHTML = `
     <div class="bg-gate-card">
       <div class="bg-gate-logo">${BREWGENGE_LOGO_SVG}</div>
       <h1>BrewGenge</h1>
       <p>Your brewing library, safely synced across every device.</p>
-      <label>Email</label>
-      <input id="bgGateEmail" type="email" placeholder="you@example.com" autocomplete="email">
-      <label class="bg-gate-check"><input type="checkbox" id="bgGateStay" ${stay?"checked":""}> Stay signed in on this device</label>
-      <button class="btn big" id="bgGateSend" style="width:100%;">Send secure sign-in link</button>
-      <button class="btn alt" id="bgGateOffline" style="width:100%;margin-top:8px;">Continue offline</button>
-      <div id="bgGateMsg" class="bg-gate-msg"></div>
+      ${buildAuthFormHTML(stay, cooldown, "gate")}
+      ${!codeStepEmail ? `<button class="btn alt" id="bgGateOffline" style="width:100%;margin-top:8px;">Continue offline</button>` : ""}
     </div>`;
-  document.body.appendChild(gate);
-  $("#bgGateEmail").addEventListener("keydown", e=>{ if(e.key==="Enter") doGateSend(); });
-  $("#bgGateStay").onchange = e=> localStorage.setItem(STAY_SIGNED_IN_KEY, e.target.checked?"1":"0");
-  $("#bgGateSend").onclick = doGateSend;
-  $("#bgGateOffline").onclick = ()=>{ localStorage.setItem(OFFLINE_MODE_KEY, "1"); removeGate(); };
+  wireAuthForm("gate");
+  const offlineBtn = $("#bgGateOffline"); if(offlineBtn) offlineBtn.onclick = ()=>{ localStorage.setItem(OFFLINE_MODE_KEY, "1"); removeGate(); };
 }
 function removeGate(){ const g = document.getElementById("bgGate"); if(g) g.remove(); }
-function doGateSend(){
-  attemptSendMagicLink($("#bgGateEmail").value, $("#bgGateMsg"), $("#bgGateSend"));
-}
 
-/* ============================================================
-   Supabase cloud sync (optional, graceful, hardened auth flow)
-   ------------------------------------------------------------
-   The SDK is loaded dynamically so a slow/blocked/paused Supabase
-   project can never hang the rest of the app: every tab renders
-   immediately regardless, and Account & Sync / the login gate just
-   show a clear error if the connection never comes good.
-   ============================================================ */
+/* ============================================================ Supabase cloud sync ============================================================ */
 function loadSupabaseScript(timeoutMs=6000){
   return new Promise((resolve)=>{
     if(typeof window.supabase !== "undefined"){ resolve(true); return; }
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-    let done = false;
-    const finish = (ok)=>{ if(done) return; done=true; resolve(ok); };
-    s.onload = ()=> finish(true);
-    s.onerror = ()=> finish(false);
+    const s = document.createElement("script"); s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+    let done = false; const finish = (ok)=>{ if(done) return; done=true; resolve(ok); };
+    s.onload = ()=> finish(true); s.onerror = ()=> finish(false);
     document.head.appendChild(s);
     setTimeout(()=> finish(typeof window.supabase !== "undefined"), timeoutMs);
   });
@@ -1502,87 +1251,39 @@ function loadSupabaseScript(timeoutMs=6000){
 async function initSupabase(){
   try{
     const loaded = await loadSupabaseScript();
-    if(!loaded || typeof window.supabase === "undefined"){
-      AUTH_INIT_ERROR = "The Supabase library did not load from the CDN (offline, blocked, or timed out).";
-      updateSyncBadge(); renderGate();
-      return;
-    }
-    if(!SB_URL || SB_URL.includes("YOUR-")){
-      AUTH_INIT_ERROR = "Supabase URL is not configured.";
-      updateSyncBadge(); renderGate();
-      return;
-    }
+    if(!loaded || typeof window.supabase === "undefined"){ AUTH_INIT_ERROR = "The Supabase library did not load from the CDN (offline, blocked, or timed out)."; updateSyncBadge(); renderGate(); return; }
+    if(!SB_URL || SB_URL.includes("YOUR-")){ AUTH_INIT_ERROR = "Supabase URL is not configured."; updateSyncBadge(); renderGate(); return; }
     sb = window.supabase.createClient(SB_URL, SB_KEY);
-
-    const hashParams = new URLSearchParams((location.hash||"").replace(/^#/,""));
-    if(hashParams.get("error")){
-      AUTH_CALLBACK_ERROR = decodeURIComponent((hashParams.get("error_description")||hashParams.get("error")||"").replace(/\+/g," "));
-      history.replaceState(null, "", location.pathname + location.search);
-    }
-
     const { data, error } = await sb.auth.getSession();
     if(error){ console.warn("getSession error", error); AUTH_INIT_ERROR = error.message; }
     USER = data && data.session ? data.session.user : null;
     if(USER){ localStorage.removeItem(OFFLINE_MODE_KEY); await cloudPull(); }
     renderGate();
-
     sb.auth.onAuthStateChange(async (event, session)=>{
       USER = session ? session.user : null;
-      if(event === "SIGNED_IN"){
-        AUTH_CALLBACK_ERROR = null;
-        localStorage.removeItem(OFFLINE_MODE_KEY);
-        history.replaceState(null, "", location.pathname + location.search);
-      }
+      if(event === "SIGNED_IN"){ localStorage.removeItem(OFFLINE_MODE_KEY); }
       if(USER) await cloudPull();
-      updateSyncBadge();
-      renderGate();
+      updateSyncBadge(); renderGate();
       if(PAGE==="account") render();
     });
-  }catch(e){
-    AUTH_INIT_ERROR = e.message || String(e);
-    console.warn("supabase init failed", e);
-  }
-  updateSyncBadge();
-  renderGate();
+  }catch(e){ AUTH_INIT_ERROR = e.message || String(e); console.warn("supabase init failed", e); }
+  updateSyncBadge(); renderGate();
 }
-
-// If "stay signed in" is unchecked, sign out whenever the tab is hidden/closed,
-// so the next visit to this device requires a fresh magic link rather than
-// silently staying signed in via Supabase's own persisted session.
 document.addEventListener("visibilitychange", ()=>{
-  if(document.visibilityState==="hidden" && sb && USER && localStorage.getItem(STAY_SIGNED_IN_KEY)==="0"){
-    sb.auth.signOut();
-  }
+  if(document.visibilityState==="hidden" && sb && USER && localStorage.getItem(STAY_SIGNED_IN_KEY)==="0"){ sb.auth.signOut(); }
 });
 
-/* ============================================================
-   Logo / crest loading (tries jpeg -> jpg -> png -> drawn SVG fallback)
-   ============================================================ */
+/* ============================================================ Logo / crest loading ============================================================ */
 function setupCrest(){
-  const el = document.getElementById("crest");
-  if(!el) return;
-  const candidates = ["img/logo.jpeg", "img/logo.jpg", "img/logo.png"];
-  let i = 0;
-  const img = document.createElement("img");
-  img.alt = "BrewGenge";
-  img.style.width = "100%";
-  img.style.height = "100%";
-  img.style.borderRadius = "50%";
-  img.style.objectFit = "cover";
-  img.style.display = "block";
-  img.onerror = function(){
-    i++;
-    if(i < candidates.length){ img.src = candidates[i]; }
-    else { el.innerHTML = BREWGENGE_LOGO_SVG; }
-  };
-  el.innerHTML = "";
-  el.appendChild(img);
-  img.src = candidates[0];
+  const el = document.getElementById("crest"); if(!el) return;
+  const candidates = ["img/logo.jpeg", "img/logo.jpg", "img/logo.png"]; let i = 0;
+  const img = document.createElement("img"); img.alt = "BrewGenge";
+  img.style.width = "100%"; img.style.height = "100%"; img.style.borderRadius = "50%"; img.style.objectFit = "cover"; img.style.display = "block";
+  img.onerror = function(){ i++; if(i < candidates.length){ img.src = candidates[i]; } else { el.innerHTML = BREWGENGE_LOGO_SVG; } };
+  el.innerHTML = ""; el.appendChild(img); img.src = candidates[0];
 }
 
-/* ============================================================
-   Boot
-   ============================================================ */
+/* ============================================================ Boot ============================================================ */
 setupCrest();
 $("#menu").onclick = ()=> $("aside").classList.toggle("open");
 render();

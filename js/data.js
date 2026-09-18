@@ -117,6 +117,7 @@ const SUPPLIERS = [
   { id:"brewman", name:"Brewman", location:"Brandy Hill, Hunter Region NSW", url:"https://www.brewman.com.au", factor:1.00, deliveryType:"flat", deliveryCost:20, freeOver:null, confirmed:false, notes:"One-stop full range, closest to Richmond Vale by road. Flat rate is indicative, confirm at checkout." },
   { id:"kegland", name:"KegLand", location:"Melbourne, VIC", url:"https://www.kegland.com.au", factor:0.92, deliveryType:"freeover", deliveryCost:12.5, freeOver:50, confirmed:true, notes:"Often cheapest for hops and dry yeast in bulk. Flat $12.50, free over $50 (confirmed)." },
   { id:"graingrape", name:"Grain & Grape", location:"Yarraville, VIC", url:"https://www.graingrape.com.au", factor:1.05, deliveryType:"flat", deliveryCost:15, freeOver:null, confirmed:false, notes:"Great specialty range including Belma and Hallertau Blanc. Delivery estimated." },
+  { id:"craftbrewer", name:"Craftbrewer", location:"Brisbane, QLD", url:"https://www.craftbrewer.com.au", factor:1.00, deliveryType:"flat", deliveryCost:12, freeOver:null, confirmed:false, notes:"Long-running specialty supplier. Delivery estimated." },
   { id:"noblebarons", name:"Noble Barons", location:"Lambton, Newcastle NSW", url:"https://noblebarons.com.au", factor:1.10, deliveryType:"freeover", deliveryCost:10, freeOver:100, confirmed:true, notes:"Closest bricks-and-mortar to Richmond Vale, local delivery from $10, free over $100 (confirmed). 24h notice for grain." }
 ];
 

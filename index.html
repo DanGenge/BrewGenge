@@ -7,31 +7,21 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='47' fill='%2314110f' stroke='%23f3b44d' stroke-width='5'/%3E%3Cpath d='M50 26 70 34v22c0 18-11 26-20 30-9-4-20-12-20-30V34Z' fill='%23bd5b08'/%3E%3Cpath d='M50 20l6 12H44Z' fill='%23f3b44d'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=7">
+<link rel="stylesheet" href="css/style.css?v=8">
 </head>
 <body>
 <div class="shell">
   <aside id="sidebar">
-    <div class="brand">
-      <div id="crest"></div>
-      <div><b>BrewGenge</b><small>Ultimate Brew Calculator</small></div>
-    </div>
+    <div class="brand"><div id="crest"></div><div><b>BrewGenge</b><small>Ultimate Brew Calculator</small></div></div>
     <nav id="nav"></nav>
     <div class="sidefoot">Built for the Guten 50L · Local-first, cloud optional</div>
   </aside>
   <section class="body">
-    <header>
-      <button id="menu" aria-label="Menu">☰</button>
-      <h1 id="title">Dashboard</h1>
-      <span id="sync">Local mode</span>
-    </header>
+    <header><button id="menu" aria-label="Menu">☰</button><h1 id="title">Dashboard</h1><span id="sync">Local mode</span></header>
     <main id="app"></main>
   </section>
 </div>
-<!-- The Supabase client library is loaded dynamically from within js/app.js
-     (see loadSupabaseScript), not as a blocking tag here. A slow, paused
-     or blocked Supabase project can never delay or hang the rest of the app. -->
-<script src="js/data.js?v=7"></script>
-<script src="js/app.js?v=7"></script>
+<script src="js/data.js?v=8"></script>
+<script src="js/app.js?v=8"></script>
 </body>
 </html>
