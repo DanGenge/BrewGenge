@@ -1,1 +1,2 @@
-Drop your logo image in this folder, named exactly one of: logo.jpeg, logo.jpg, logo.png (lowercase). The app tries all three automatically and falls back to a built-in drawn Celtic crest if none exist.
+Drop your logo image in this folder, named exactly one of: logo.jpeg, logo.jpg, logo.png (lowercase).
+The app tries all three automatically and falls back to a built-in drawn Celtic crest if none exist.
