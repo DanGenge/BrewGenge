@@ -151,9 +151,6 @@ const STYLE_GUIDELINES = {
   "oatmeal stout": { og:[1.048,1.065], fg:[1.010,1.018], abv:[4.2,5.9], ibu:[25,40], ebc:[65,150] }
 };
 
-/* ---- Style-aware default water targets (used when a custom/imported recipe has no
-   water profile of its own, so the salt calculator has something meaningful to compare
-   against rather than silently defaulting to a copy of the source water). ---- */
 const STYLE_WATER_DEFAULTS = [
   { test:/hazy|neipa|new england/i,           water:{Ca:90,  Mg:8,  Na:20, SO4:70,  Cl:150, Alk:40}  },
   { test:/west coast|american ipa|\bipa\b/i,   water:{Ca:110, Mg:12, Na:20, SO4:220, Cl:75,  Alk:40}  },

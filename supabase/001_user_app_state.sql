@@ -1,9 +1,11 @@
 -- ============================================================================
 -- BrewGenge cloud sync table. Run once in the Supabase SQL editor.
 -- Safe to re-run. This is ALL the SQL required for the current app,
--- including sign-in/sync and recipe packs. Login problems are almost
--- always a paused project or a Dashboard configuration issue (see
--- README), not a SQL issue.
+-- including sign-in/sync, safe merge sync, and recipe packs. Login
+-- problems are almost always a paused project or a Site URL / Redirect
+-- URL mismatch in Authentication settings (see README), not a SQL issue.
+-- No schema changes were needed for the login gate / safe merge sync
+-- upgrade, this file is unchanged from the previous version.
 -- ============================================================================
 
 create table if not exists public.user_app_state (

@@ -10,37 +10,50 @@ A free, static brew calculator with optional Supabase cloud sync. Built around t
 
 ## Adding your own logo
 
-Drop a file at `img/logo.jpeg` (or `.jpg` / `.png`) — the app tries all three extensions automatically and falls back to a built-in drawn Celtic crest if none exist. **Filename must be lowercase** — GitHub Pages is case-sensitive.
+Drop a file at `img/logo.jpeg` (or `.jpg` / `.png`) — the app tries all three extensions automatically and falls back to a built-in drawn Celtic crest if none exist. **Filename must be lowercase.**
 
-## Signing in (magic link email) — no SQL required, this is a Dashboard/project setting
+## Signing in — new login cover page + safe cloud sync
 
-Run `supabase/001_user_app_state.sql` once, that's the only SQL BrewGenge needs, ever, for the current feature set (recipes, ratings, brew history, images, packs, sign-in/sync).
+Opening BrewGenge on a device that isn't already signed in now shows a login screen: enter your email, tick **Stay signed in on this device** (on by default), click **Send secure sign-in link**, or click **Continue offline** to skip it entirely (BrewGenge works fully offline, forever, if you prefer).
 
-**If clicking "Send magic link" shows an immediate error like "Load failed" or "Failed to fetch" (not a delayed rate-limit message):** the request never reached Supabase at all. Check, in order:
+Click the emailed link on the **same device** you requested it from. After that, Supabase keeps the session persisted, so this really is a one-off per device as long as "Stay signed in" stays ticked. Unticking it signs you out automatically whenever the tab is closed or backgrounded, useful on a shared computer.
 
-1. **Is the Supabase project paused?** Free-tier projects pause automatically after about a week of no activity. Log into supabase.com, open the project, and look for a "Restore project" button. This is by far the most common cause, and explains identical failures across completely different browsers/devices (PC Edge and iPhone Safari both failing the same way is the signature of this, not a browser-specific bug).
-2. **Project URL and API key still match** — Settings → API in the Supabase dashboard.
-3. **Try a different network** — some corporate/school Wi-Fi blocks third-party API domains outright.
+Run `supabase/001_user_app_state.sql` once, that's the only SQL BrewGenge needs. No schema changes were required for this upgrade.
 
-**Once requests are reaching Supabase but the email itself never arrives:**
+### If sign-in fails identically on every device/browser
 
-1. **Spam / Junk folder** first, always.
-2. **Redirect URL allow-list** — Supabase project → **Authentication → URL Configuration → Redirect URLs**. Add your exact GitHub Pages URL here (the Account & Sync tab in the app shows you the exact string to copy).
-3. **Site URL** — same settings screen, set it to your GitHub Pages URL, not the Supabase default `localhost` placeholder.
-4. **Rate limits** — Supabase's free tier allows roughly one OTP email per address every 60 seconds, and a small hourly cap project-wide. The app enforces and displays a 60 second cooldown on the "Send magic link" button so you can't accidentally trigger the rate limit yourself.
+1. **Paused Supabase project** — free-tier projects auto-pause after about a week of inactivity. Log into supabase.com, open the project, click **Restore** if it says Paused, wait a couple of minutes.
+2. **Site URL / Redirect URL mismatch** — Supabase → **Authentication → URL Configuration**. Both **Site URL** and **Redirect URLs** must be your real live GitHub Pages URL, not `localhost`. The Account & Sync tab shows you the exact string to paste in. A mismatch here is what causes "invalid or expired" errors even on a freshly clicked link.
+3. **Rate limits** — roughly one email per address every 60 seconds. The app enforces a matching cooldown so you can't trigger this yourself.
 
-The app also reads any `#error=...` parameters Supabase attaches to the URL after a bad/expired link click and displays the actual reason on the Account & Sync tab, rather than failing silently.
+## Why recipes/images weren't syncing before, and what changed
 
-## Water and salt additions
+Previously, signing in on a second device would **overwrite** whichever side (local or cloud) was older, in either direction — so an empty new phone could wipe a populated cloud library, or vice versa. Every sync operation now:
 
-The Water tab now calculates real litres, not just ion ppm targets: strike water volume and temperature, mash tun volume, sparge water volume, and total water needed, all recalculated live from the selected recipe, batch size, equipment and mash/sparge settings. It then suggests exact gram amounts of Gypsum, Calcium Chloride, Epsom Salt, Baking Soda, and mL of 88% Lactic Acid, based on the gap between your source water and the recipe's target water profile.
+1. Fetches the current cloud copy first
+2. **Merges** it with the local copy by matching recipe IDs, keeping whichever version of each recipe was edited most recently
+3. Combines favourites, pantry ticks, ratings and brew history from both sides rather than replacing one with the other
+4. Only then writes the merged result back to the cloud
 
-Custom recipes (via Create a Brew) and imported recipes without their own water profile automatically get a sensible **style-aware** water target (matched by keyword against the style text, e.g. IPA gets a sulphate-forward profile, Stout gets higher alkalinity) rather than defaulting to a copy of the source water, which would make every salt suggestion show 0.0g.
+An empty device can no longer erase a populated cloud library, and vice versa. The very first device to ever sign in uploads its library; every later device merges instead of overwriting.
 
-## Sharing recipes
+## Sharing recipes (no account needed)
 
-Recipe Library → **Export Recipe Pack** (all / favourites / mine) or the ⬇ icon on a single row, or the same icon inside the recipe detail popup. Images are embedded as Base64 inside the JSON. **Import JSON** understands both BrewGenge's own format and common "verbose" recipe JSON (e.g. `fermentables`/`hops` as named objects with `amountKg`/`amountG`/`alphaAcidPercent`, and water as `sulfate`/`alkalinity` style long-form keys), which is what most AI-generated recipe searches produce. If a file has no readable ingredients, you get a clear error instead of a blank recipe.
+Recipe Library → **Export Recipe Pack** (all / favourites / mine) or the ⬇ icon on any recipe. Images are embedded as Base64 inside the JSON. **Import JSON** understands both BrewGenge's own format and common "verbose" recipe JSON.
 
-## "Do I need a Community feature?"
+## Do I need a "Community" feature?
 
-No, not for sharing. Export/Import already lets you send a recipe (with photo) to a mate, and each of you keeps completely separate accounts and data if you both sign in. A "BrewGenge Community" feature would only be needed for **live, in-app discovery and sharing between different accounts** — that's a genuinely different feature, and would need a new Supabase migration for cross-account visibility rules.
+No, not for sharing between mates, export/import already covers that and each account stays completely separate. A "BrewGenge Community" feature (live discovery/sharing between different accounts) would need a new Supabase migration, this isn't built yet.
+
+## Features
+
+Dashboard · Recipe Library · Recipe Detail popup (image, style comparison, live shopping list, star rating, brew history) · Equipment profiles · Create a Brew · Find a Brew · Fermentables · Hops (Tinseth IBU) · Water (mash/sparge temps + volumes, automatic salt calculator) · Brew Day · Fermentation log · Cost · Find Ingredients · Find a Supplier · Account & Sync with login gate and safe merge sync · Read Me.
+
+## Changelog
+
+- **Login cover page**: shown on any device not already signed in, with a "Stay signed in" checkbox (default on) and a "Continue offline" option that permanently skips it until you choose to sign in from the Account & Sync tab.
+- **Safe merge sync** (the fix for "my recipes/images aren't syncing"): sync no longer blindly overwrites in either direction. It reads the cloud copy, merges by recipe ID keeping the most recently edited version, unions favourites/pantry/ratings/brew history, and writes the merged result back. First-ever sign-in uploads local data; an empty device merging with a populated cloud restores everything automatically.
+- Water tab: strike/sparge temperatures and volumes, automatic salt addition calculator (Gypsum, Calcium Chloride, Epsom Salt, Baking Soda, Lactic Acid), fixed so new/imported recipes get a real style-appropriate water target instead of a copy of the source water (previously caused every salt suggestion to show 0.0g).
+- Recipe Detail popup: image, style-range comparison, colour estimate, live shopping list, 1-5 star rating, brew history log.
+- Recipe Library action icons (Export/Delete) fixed, previously clipped off-screen.
+- Hardened login errors: real Supabase error messages, resend cooldown with visible countdown, `#error=...` redirect errors parsed and explained, dynamic SDK loading so a paused project never hangs the rest of the app.

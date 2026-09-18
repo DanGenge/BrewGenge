@@ -9,6 +9,8 @@ const SB_KEY = "sb_publishable_WdvQhwumdXn5c35OdVZasA_sQWK0dM3";
 const STORE = "brewgenge_state_v1";
 const OTP_COOLDOWN_KEY = "brewgenge_otp_last_sent";
 const OTP_COOLDOWN_SECONDS = 60;
+const STAY_SIGNED_IN_KEY = "brewgenge_stay_signed_in";
+const OFFLINE_MODE_KEY = "brewgenge_offline_mode";
 
 let sb = null, USER = null, syncStatus = "local", syncTimer = null;
 let AUTH_INIT_ERROR = null;
@@ -34,7 +36,8 @@ function defaults(){
     efficiency: 0.75,
     fermLog: [],
     draftRecipe: null,
-    draftEquipment: null
+    draftEquipment: null,
+    lastActivityAt: null
   };
 }
 let STATE = load();
@@ -56,12 +59,13 @@ function merge(base, over){
   }
   return over !== undefined ? over : base;
 }
-function save(){ localStorage.setItem(STORE, JSON.stringify(STATE)); cloudPush(); }
+function save(){
+  STATE.lastActivityAt = new Date().toISOString();
+  localStorage.setItem(STORE, JSON.stringify(STATE));
+  cloudPush();
+}
 
-// One-time repair: any custom recipe whose water target is an EXACT copy of the
-// Floraville source water (the signature of the old bug, before style-aware defaults
-// existed) gets repaired to a proper style-aware target. Never touches a genuinely
-// custom water profile someone deliberately set.
+// One-time repair for recipes saved before the water-target fix.
 function waterMatchesFloraville(w){
   if(!w) return false;
   return WATER_IONS.every(ion => Math.abs((w[ion]||0) - (FLORAVILLE_WATER[ion]||0)) < 0.01);
@@ -74,7 +78,7 @@ function repairWaterlessCustomRecipes(state){
   });
   if(fixed>0){
     localStorage.setItem(STORE, JSON.stringify(state));
-    console.info("BrewGenge: repaired water target on "+fixed+" recipe(s) that had no real style profile set.");
+    console.info("BrewGenge: repaired water target on "+fixed+" recipe(s).");
   }
 }
 
@@ -200,7 +204,7 @@ function deleteSession(id, sessId){
   }
 }
 
-/* ---------- Style guideline + colour estimate ---------- */
+/* ---------- Style guideline lookup + rough colour estimate ---------- */
 function findStyleGuideline(styleName){
   const key = (styleName||"").trim().toLowerCase();
   return STYLE_GUIDELINES[key] || null;
@@ -339,6 +343,7 @@ function render(){
     fermentables:fermentables,hops:hopsTab,water:water,brewday:brewday,fermentation:fermentation,
     cost:cost,finding:finding,supplier:supplier,account:account,readme:readme}[PAGE])();
   updateSyncBadge();
+  renderGate();
 }
 
 /* ---------- Dashboard ---------- */
@@ -539,7 +544,7 @@ function create(){
   $("#app").innerHTML = `
     <div class="card">
       <h3>Create a BrewGenge Original</h3>
-      <p class="desc">Fill in your grain and hops at the base batch size, the app scales from there. It saves to My Recipes and auto-labels as BrewGenge, and gets a style-appropriate water target automatically.</p>
+      <p class="desc">Fill in your grain and hops at the base batch size, the app scales from there. It saves to My Recipes and auto-labels as BrewGenge.</p>
       <div class="fields">
         <div class="field"><label>Name</label><input id="dn" value="${esc(d.name)}" placeholder="Newy Lager"></div>
         <div class="field"><label>Style</label><input id="ds" value="${esc(d.style)}" placeholder="Australian Lager"></div>
@@ -590,7 +595,7 @@ function create(){
 function findbrew(){
   $("#app").innerHTML = `
     <div class="card"><h3>Find a Brew</h3>
-      <p class="desc">A static site can't safely call a live AI search API (that needs a server-side key). Instead, ask an AI assistant in chat for a recipe, paste the JSON it gives you here, and it loads straight into Create a Brew. Or use Quick Generate to adapt a style template. Both the simple BrewGenge format and most "verbose" recipe JSON shapes (fermentables/hops as objects with names like amountKg, amountG, alphaAcidPercent) are understood automatically.</p>
+      <p class="desc">A static site can't safely call a live AI search API (that needs a server-side key). Instead, ask an AI assistant in chat for a recipe, paste the JSON it gives you here, and it loads straight into Create a Brew. Or use Quick Generate to adapt a style template.</p>
     </div>
     <h2 class="sec">Paste a recipe</h2>
     <div class="card">
@@ -677,9 +682,6 @@ function water(){
       ${stat("Total grain", fmt(c.totalGrain,2)+" kg")}
       ${stat("Grain absorption", fmt(c.grainAbsorptionL,1)+" L")}
     </div>
-    <div class="card">
-      <p class="muted">Strike temperature is calculated from the classic heat-balance formula (grain's specific heat &asymp; 0.4 &times; water's), so dough-in lands right on your target mash temp instead of guessing and overshooting. Mash tun volume adds the grain's own displaced volume (~0.67 L/kg) on top of the strike water, useful for checking headspace in your mash tun or basket. Confirm your actual dough-in temperature with a thermometer, insulation and ambient conditions shift the real number slightly.</p>
-    </div>
 
     <h2 class="sec">Sparge setup</h2>
     <div class="card">
@@ -691,9 +693,6 @@ function water(){
       ${stat("Sparge water volume", fmt(c.spargeWater,1)+" L")}
       ${stat("Total water needed", fmt(c.totalWater,1)+" L")}
       ${stat("Pre-boil volume", fmt(c.preboil,1)+" L")}
-    </div>
-    <div class="card">
-      <p class="muted">Sparge water tops the kettle up to its pre-boil volume (${fmt(c.preboil,1)} L), after allowing for water the grain itself soaks up (${GRAIN_ABSORPTION_L_PER_KG} L/kg). ${fmt(DEFAULT_SPARGE_TEMP_C,0)}&deg;C is the usual sweet spot, hot enough to keep runnings flowing freely, cool enough to avoid stewing tannins out of the grain husks. Treat all mash and sparge water for chlorine/chloramine with Campden before use.</p>
     </div>
 
     <h2 class="sec">Source water (edit if you have a test result)</h2>
@@ -721,10 +720,10 @@ function water(){
       </tbody></table>
       <div class="note">These are calculated automatically from the gap between your source water and this recipe's target profile, they recalculate whenever you change recipe, batch size, mash/sparge settings, or the source water figures above. Treat this as a starting point, not gospel, always measure actual mash pH 10 to 15 minutes after dough-in with a calibrated pH meter (aiming for roughly 5.2 to 5.6) and adjust from there.</div>
     </div>`;
+  document.querySelectorAll("[data-w]").forEach(inp=>inp.onchange=()=>{STATE.sourceWater[inp.dataset.w]=+inp.value||0;save();render();});
   $("#wMashTemp").onchange = e=>{ r.mashTemp = parseFloat(e.target.value); if(isNaN(r.mashTemp)) r.mashTemp = DEFAULT_MASH_TEMP_C; if(isCustom(r.id)) save(); render(); };
   $("#wGrainTemp").onchange = e=>{ STATE.grainTempC = parseFloat(e.target.value); if(isNaN(STATE.grainTempC)) STATE.grainTempC = DEFAULT_GRAIN_TEMP_C; save(); render(); };
   $("#wSpargeTemp").onchange = e=>{ STATE.spargeTempC = parseFloat(e.target.value); if(isNaN(STATE.spargeTempC)) STATE.spargeTempC = DEFAULT_SPARGE_TEMP_C; save(); render(); };
-  document.querySelectorAll("[data-w]").forEach(inp=>inp.onchange=()=>{STATE.sourceWater[inp.dataset.w]=+inp.value||0;save();render();});
 }
 
 /* ---------- Brew Day ---------- */
@@ -733,8 +732,8 @@ function brewday(){
   $("#app").innerHTML = `
     <div class="card"><p>Recipe: <span class="calc">${esc(r.name)}</span> Gear: <span class="calc">${esc(c.eq.name)}</span> Batch: <span class="calc">${fmt(STATE.batchSize,1)} L</span></p></div>
     <div class="card stats">
-      ${stat("Total grain",fmt(c.totalGrain,2)+" kg")}${stat("Strike water",fmt(c.strike,1)+" L")}${stat("Sparge water",fmt(c.spargeWater,1)+" L")}
-      ${stat("Total water",fmt(c.totalWater,1)+" L")}${stat("Pre-boil volume",fmt(c.preboil,1)+" L")}
+      ${stat("Total grain",fmt(c.totalGrain,2)+" kg")}${stat("Mash tun volume",fmt(c.mashVolume,1)+" L")}${stat("Strike water",fmt(c.strike,1)+" L")}
+      ${stat("Sparge water",fmt(c.spargeWater,1)+" L")}${stat("Total water",fmt(c.totalWater,1)+" L")}
     </div>
     <div class="card stats">
       ${stat("Grain fit",c.grainOK?'OK':'Too much')}${stat("Kettle fit",c.boilOK?'OK':'Too much')}
@@ -827,7 +826,7 @@ function supplier(){
 }
 
 /* ============================================================
-   Account & Sync — hardened login flow
+   Account & Sync — hardened login flow + safe merge sync
    ============================================================ */
 function secondsLeftOnCooldown(){
   const last = parseInt(localStorage.getItem(OTP_COOLDOWN_KEY) || "0", 10);
@@ -838,40 +837,36 @@ let cooldownTimer = null;
 function account(){
   const ready = !!sb;
   const cooldown = secondsLeftOnCooldown();
+  const stay = localStorage.getItem(STAY_SIGNED_IN_KEY) !== "0";
   $("#app").innerHTML = `
     <div class="card"><h3>Account & Sync</h3>
       <p class="desc">Sign in with your email to back up recipes, gear, pantry, ratings and images to the cloud and use BrewGenge across devices. Give a mate a copy of the site and everyone stays completely separate, each account only ever sees its own private data. Skip this entirely and everything still works, saved in this browser only.</p>
       <p>Status: <span id="syncStatusBadge" class="${USER?'badge-ok':''}">${USER?'Signed in as '+esc(USER.email):'Not signed in'}</span></p>
     </div>
 
-    ${AUTH_INIT_ERROR ? `<div class="card"><p class="warn"><b>Supabase didn't load:</b> ${esc(AUTH_INIT_ERROR)}</p><p class="muted">This usually means the browser blocked the Supabase script (an ad-blocker, privacy extension, or corporate network filter), you're offline, or the Supabase project itself is paused/unreachable. Free-tier Supabase projects pause automatically after a week of inactivity, log into supabase.com and check for a "Restore project" button. Local mode still works fully either way.</p></div>` : ""}
+    ${AUTH_INIT_ERROR ? `<div class="card"><p class="warn"><b>Supabase didn't load:</b> ${esc(AUTH_INIT_ERROR)}</p><p class="muted">This usually means: (1) the Supabase project is paused (free-tier projects auto-pause after a week of inactivity, check the Supabase dashboard and click Restore), (2) an ad-blocker/privacy extension/corporate firewall blocked the request, or (3) you're offline. Local mode still works fully in the meantime.</p></div>` : ""}
 
     ${AUTH_CALLBACK_ERROR ? `<div class="card"><p class="warn"><b>The magic link didn't work:</b> ${esc(AUTH_CALLBACK_ERROR)}</p><p class="muted">${authErrorAdvice(AUTH_CALLBACK_ERROR)}</p></div>` : ""}
 
     ${!ready ? "" :
-      USER ? `<div class="card"><div class="toolbar"><button class="btn" id="syncNow">Sync now</button><button class="btn alt" id="out">Sign out</button></div></div>`
+      USER ? `<div class="card"><div class="toolbar"><button class="btn" id="syncNow">Sync now</button><button class="btn alt" id="out">Sign out</button></div><p id="syncMsg" class="muted" style="margin-top:10px;">${esc(LAST_SYNC_MESSAGE||"")}</p></div>`
       : `<div class="card">
           <div class="field" style="max-width:320px;"><label>Email</label><input id="email" type="email" placeholder="you@example.com" autocomplete="email"></div><br>
+          <label class="toggle" style="margin-bottom:10px; display:flex; align-items:center; gap:8px;"><input type="checkbox" id="acctStay" ${stay?"checked":""}> Stay signed in on this device</label>
           <button class="btn" id="signin" ${cooldown>0?'disabled':''}>${cooldown>0 ? 'Wait '+cooldown+'s to resend' : 'Send magic link'}</button>
           <div id="msg" style="margin-top:10px;"></div>
         </div>`}
 
-    <div class="card"><h3>Troubleshooting: "Load failed" or nothing sends</h3>
-      <p class="desc">If clicking "Send magic link" immediately shows a red error like "Load failed" or "Failed to fetch" (rather than a delayed rate-limit message), the request never even reached Supabase. This is different from a delivery problem, check these first:</p>
+    <div class="card"><h3>Troubleshooting: nothing sends, "Load failed", or a bad/expired link</h3>
+      <p class="desc">If this fails the same way on every device and every browser (not just one phone), it is almost always one of these, checked in order:</p>
       <ol style="margin:8px 0 0; padding-left:20px; font-size:.86rem; color:var(--muted); line-height:1.7;">
-        <li><b>Is the Supabase project paused?</b> The most common cause. Free projects pause automatically after about a week of no activity. Log into supabase.com, open this project, and look for a "Restore project" button. Wait a couple of minutes after restoring before trying again.</li>
-        <li><b>Project URL and API key still match.</b> In Supabase, Settings &rarr; API, confirm the Project URL and publishable key haven't been regenerated or copied from a different project.</li>
-        <li><b>Try a different network.</b> Some corporate/school Wi-Fi networks block third-party API domains outright. Try mobile data with Wi-Fi off.</li>
+        <li><b>Paused Supabase project.</b> Free-tier projects pause themselves after about a week with no activity. Log into supabase.com, open this project, and if it says "Paused", click Restore and wait a couple of minutes.</li>
+        <li><b>Site URL / Redirect URL mismatch.</b> <span class="pill">Authentication → URL Configuration</span> in Supabase. Both <b>Site URL</b> and <b>Redirect URLs</b> must be set to your real live URL below, not <code>localhost</code>. A mismatch here causes "invalid or expired link" even on a fresh click.</li>
+        <li><b>Rate limits.</b> Roughly one OTP email per address every 60 seconds, and a small hourly cap project-wide on the free tier.</li>
+        <li><b>Slow email.</b> Magic links expire quickly (a few minutes), open the email and click straight away.</li>
       </ol>
-      <p class="desc" style="margin-top:14px;">Once the request is actually reaching Supabase but the email itself never arrives, then it's a delivery/redirect issue:</p>
-      <ol style="margin:8px 0 0; padding-left:20px; font-size:.86rem; color:var(--muted); line-height:1.7;">
-        <li><b>Spam / Junk folder</b> first, always.</li>
-        <li><b>Redirect URL allow-list</b>: Authentication &rarr; URL Configuration. The exact page URL below must be added there.</li>
-        <li><b>Rate limits</b>: Supabase's free tier only allows a new OTP email roughly once every 60 seconds per address, and a small number of emails per hour project-wide.</li>
-        <li><b>Site URL</b> in the same settings screen should also be set to your GitHub Pages URL, not left as the Supabase default localhost address.</li>
-      </ol>
-      <p class="muted" style="margin-top:10px;">Current page URL, copy this exactly into the Redirect URLs allow-list:</p>
-      <div class="calc" style="word-break:break-all;">${esc(location.href.split("#")[0])}</div>
+      <p class="muted" style="margin-top:10px;">Current page URL, copy this exactly into both Site URL and Redirect URLs:</p>
+      <div class="calc" style="word-break:break-all;">${esc(location.origin + location.pathname)}</div>
     </div>
 
     <div class="card"><h3>Sharing recipes with mates</h3>
@@ -879,57 +874,61 @@ function account(){
     </div>`;
 
   if(USER){
-    $("#syncNow").onclick=()=>cloudPush(true);
-    $("#out").onclick=async()=>{ await sb.auth.signOut(); USER=null; syncStatus="local"; render(); };
+    $("#syncNow").onclick=async()=>{ $("#syncNow").disabled=true; await safeSyncNow(); render(); };
+    $("#out").onclick=async()=>{ if(sb) await sb.auth.signOut(); USER=null; syncStatus="local"; render(); };
   } else if(ready){
     $("#email").addEventListener("keydown", e=>{ if(e.key==="Enter" && !$("#signin").disabled) $("#signin").click(); });
-    $("#signin").onclick=async()=>{
-      const emailEl = $("#email");
-      const email = emailEl.value.trim();
-      const msgEl = $("#msg");
-      if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
-        msgEl.innerHTML = `<span class="warn">Enter a valid email address.</span>`;
-        return;
-      }
-      msgEl.innerHTML = `<span class="muted">Sending...</span>`;
-      $("#signin").disabled = true;
-      try{
-        const { error } = await sb.auth.signInWithOtp({
-          email,
-          options: { emailRedirectTo: location.href.split("#")[0] }
-        });
-        if(error){
-          msgEl.innerHTML = `<span class="warn">${esc(error.message)}</span>`;
-          $("#signin").disabled = false;
-        } else {
-          localStorage.setItem(OTP_COOLDOWN_KEY, String(Date.now()));
-          msgEl.innerHTML = `<span class="ok">Magic link sent to ${esc(email)}. Check your inbox (and spam folder), it can take a minute or two.</span>`;
-          startCooldownCountdown();
-        }
-      }catch(e){
-        msgEl.innerHTML = `<span class="warn">Network error contacting Supabase: ${esc(e.message)}. This usually means the Supabase project is paused or unreachable, check the troubleshooting card below.</span>`;
-        $("#signin").disabled = false;
-      }
-    };
-    if(cooldown>0) startCooldownCountdown();
+    $("#acctStay").onchange = e=>localStorage.setItem(STAY_SIGNED_IN_KEY, e.target.checked?"1":"0");
+    $("#signin").onclick=()=> attemptSendMagicLink($("#email").value, $("#msg"), $("#signin"));
+    if(cooldown>0) startCooldownCountdown($("#signin"));
   }
 }
 function authErrorAdvice(msg){
   const m = (msg||"").toLowerCase();
-  if(/expired/.test(m)) return "The link had already expired (they're time-limited). Request a fresh one below.";
-  if(/redirect/.test(m) || /url/.test(m)) return "This is almost always the Redirect URL allow-list in your Supabase project settings, see the checklist below.";
+  if(/expired/.test(m)) return "The link had already expired, or the Site URL in Supabase still points at localhost. Request a fresh one and check the URL Configuration checklist below.";
+  if(/redirect/.test(m) || /url/.test(m)) return "This is almost always the Site URL / Redirect URL setup in your Supabase project, see the checklist below.";
   if(/rate/.test(m) || /too many/.test(m)) return "You've requested too many links too quickly, Supabase enforces a short cooldown. Wait a minute and try again.";
   return "See the checklist below for the most common causes.";
 }
-function startCooldownCountdown(){
+function startCooldownCountdown(btn){
   clearInterval(cooldownTimer);
   cooldownTimer = setInterval(()=>{
     const left = secondsLeftOnCooldown();
-    const btn = $("#signin");
-    if(!btn){ clearInterval(cooldownTimer); return; }
+    if(!btn || !document.body.contains(btn)){ clearInterval(cooldownTimer); return; }
     if(left<=0){ btn.disabled=false; btn.textContent="Send magic link"; clearInterval(cooldownTimer); }
     else { btn.disabled=true; btn.textContent = "Wait "+left+"s to resend"; }
   }, 1000);
+}
+// Shared by both the Account & Sync tab and the login gate overlay.
+async function attemptSendMagicLink(email, msgEl, btnEl){
+  email = (email||"").trim();
+  if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    msgEl.innerHTML = `<span class="warn">Enter a valid email address.</span>`; return;
+  }
+  if(!sb){
+    msgEl.innerHTML = `<span class="warn">Still connecting to Supabase. If this persists, the project may be paused, check the Supabase dashboard.</span>`; return;
+  }
+  const cooldown = secondsLeftOnCooldown();
+  if(cooldown>0){ msgEl.innerHTML = `<span class="warn">Wait ${cooldown}s before requesting another link.</span>`; return; }
+  msgEl.innerHTML = `<span class="muted">Sending...</span>`;
+  if(btnEl) btnEl.disabled = true;
+  try{
+    const { error } = await sb.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: location.origin + location.pathname }
+    });
+    if(error){
+      msgEl.innerHTML = `<span class="warn">${esc(error.message)}</span>`;
+      if(btnEl) btnEl.disabled = false;
+    } else {
+      localStorage.setItem(OTP_COOLDOWN_KEY, String(Date.now()));
+      msgEl.innerHTML = `<span class="ok">Magic link sent to ${esc(email)}. Check your inbox (and spam folder) and click it quickly, it expires in a few minutes.</span>`;
+      if(btnEl) startCooldownCountdown(btnEl);
+    }
+  }catch(e){
+    msgEl.innerHTML = `<span class="warn">Network error contacting Supabase: ${esc(e.message)}. This usually means the Supabase project is paused (check the dashboard) or unreachable from this network.</span>`;
+    if(btnEl) btnEl.disabled = false;
+  }
 }
 
 /* ---------- Read Me ---------- */
@@ -938,17 +937,20 @@ function readme(){
     <div class="card"><h3>How to use BrewGenge</h3><ol>
       <li>Pick a recipe and batch size on the Dashboard, everything scales automatically.</li>
       <li>Choose your gear under Equipment, capacity checks follow it.</li>
-      <li>Click 🔍 on any recipe for the full detail popup: image, style check, live shopping list, rating and brew history.</li>
+      <li>Click 🔍 on any recipe for the full detail popup, image, style check, live shopping list, rating and brew history.</li>
       <li>Tick "Already have?" on Fermentables/Hops (or inside the popup) to drop pantry items from the Cost.</li>
+      <li>Water tab covers mash, sparge and salt additions, all in real litres and grams, not just ppm targets.</li>
       <li>Brew Day and Fermentation are your live log.</li>
+      <li>Sign in once per device (tick "Stay signed in") to safely sync everything, including images, across devices.</li>
     </ol></div>
-    <div class="card"><h3>Water and salt additions</h3>
-      <p>The Water tab calculates strike water volume and temperature, mash tun volume, sparge water volume and total water needed, in litres, not just ion targets. It then suggests exact grams of Gypsum, Calcium Chloride, Epsom Salt, Baking Soda and 88% Lactic Acid based on the gap between your source water and this recipe's target profile, recalculated live whenever you change recipe, batch size, mash/sparge settings, or the source water figures. Custom and imported recipes automatically get a sensible style-appropriate water target (an IPA gets a sulphate-forward profile, a stout gets higher alkalinity, etc.) rather than defaulting to a copy of the source water.</p>
+    <div class="card"><h3>Signing in and syncing, how it actually works now</h3>
+      <p>The first time you open BrewGenge on a new device without an existing session, a sign-in screen appears. Enter your email, tick <b>Stay signed in on this device</b> (on by default), and click Send magic link. Click the link in the email on the <b>same device</b>. After that, Supabase keeps you signed in automatically, this really is a one-off per device unless you sign out, clear browser data, or untick "Stay signed in" (which signs you out again whenever you close or background the tab, useful for a shared computer).</p>
+      <p><b>Sync is now merge-based, not overwrite-based.</b> When two devices both have recipes, BrewGenge combines them by recipe ID and keeps whichever version was edited most recently, rather than one device's empty or older library silently replacing the other's. Favourites, pantry ticks, ratings and brew history are combined the same way. The very first device to sign in uploads its library to the cloud; any later device with an empty library automatically downloads it.</p>
+      <p>If you'd rather not rely on this at all, <b>Export Recipe Pack</b> on the Recipe Library still works exactly as before and needs no account, useful as a manual backup or for handing a recipe to a mate.</p>
     </div>
     <div class="card"><h3>Sharing recipe packs</h3>
       <p>Recipe Library → Export Recipe Pack. Choose all recipes, favourites, or BrewGenge originals. Uploaded images are embedded as Base64 inside the JSON and import with the recipe. Single recipes can be exported with the ⬇ icon on each row.</p>
-      <p>Importing understands both BrewGenge's own format AND common "verbose" recipe JSON (fermentables/hops as named objects, e.g. from an AI chat search). If a file genuinely doesn't contain readable ingredients, you'll get a clear error instead of a blank recipe.</p>
-      <div class="note"><b>No additional SQL is required for recipe packs.</b> They work entirely in the browser. A future BrewGenge Community feature (sharing between accounts) would need a new Supabase migration.</div>
+      <div class="note"><b>No additional SQL is required for recipe packs or for signing in.</b> They work entirely in the browser (packs) or against the single existing sync table (sign-in). A future "BrewGenge Community" feature, live recipe sharing between different accounts, would need a new Supabase migration. Simple export/import already covers "share with a mate" without needing that.</div>
     </div>
     <div class="card"><h3>Custom logo and recipe photos</h3>
       <p>The BrewGenge crest and every recipe icon are built-in vector art, so nothing is ever a broken image. To use your own logo: add a file to <code>img/logo.jpeg</code> (or <code>.jpg</code> / <code>.png</code>) in your repo, lowercase filename exactly. GitHub Pages is case-sensitive, so <code>Logo.JPEG</code> will NOT match <code>logo.jpeg</code>.</p>
@@ -961,7 +963,7 @@ function readme(){
 }
 
 /* ============================================================
-   Recipe Detail Modal
+   Recipe Detail Modal (Brewfather / Grainfather style popup)
    ============================================================ */
 function openRecipeModal(id){
   STATE.selectedId = id; save();
@@ -1154,13 +1156,6 @@ function resizeImg(file, cb){
 /* ============================================================
    Recipe import normalisation
    ============================================================ */
-function extractRecipeList(o){
-  if(Array.isArray(o)) return o;
-  if(o && Array.isArray(o.recipes)) return o.recipes;
-  if(o && o.recipe && typeof o.recipe === "object") return [o.recipe];
-  if(o && typeof o === "object" && (o.ferm || o.fermentables)) return [o];
-  return null;
-}
 function normalizeWaterObject(w){
   if(!w || typeof w !== "object") return null;
   const pick = (...keys) => { for(const k of keys){ if(w[k]!=null && !isNaN(w[k])) return +w[k]; } return null; };
@@ -1176,6 +1171,13 @@ function normalizeWaterObject(w){
   if(!hasAny) return null;
   WATER_IONS.forEach(ion => { if(out[ion]==null) out[ion] = FLORAVILLE_WATER[ion]; });
   return out;
+}
+function extractRecipeList(o){
+  if(Array.isArray(o)) return o;
+  if(o && Array.isArray(o.recipes)) return o.recipes;
+  if(o && o.recipe && typeof o.recipe === "object") return [o.recipe];
+  if(o && typeof o === "object" && (o.ferm || o.fermentables)) return [o];
+  return null;
 }
 function normalizeRecipe(raw){
   if(!raw || typeof raw !== "object") return null;
@@ -1323,18 +1325,191 @@ function importJSON(e){
 }
 
 /* ============================================================
-   Supabase cloud sync (optional, graceful, hardened auth flow)
+   SAFE MERGE SYNC
+   ------------------------------------------------------------
+   Previously, cloudPull() overwrote local state wholesale with
+   whatever was in the cloud, and cloudPush() overwrote the cloud
+   record wholesale with local state. Either direction could wipe
+   out recipes/images that only existed on the *other* side (e.g.
+   signing in on a second phone before it had ever synced would
+   push its empty library over the top of a populated cloud copy).
+   Every sync operation below now reads the current cloud row
+   first, merges it with local state by recipe ID (keeping
+   whichever version was edited most recently), and only then
+   writes the merged result back. An empty side can never erase
+   a populated side.
    ============================================================ */
+let LAST_SYNC_MESSAGE = "";
+function tsOf(obj){ return Date.parse(obj && (obj.updatedAt||obj.createdAt) || 0) || 0; }
+function mergeArrayById(a, b){
+  const map = new Map();
+  [...(a||[]), ...(b||[])].forEach(item=>{
+    if(!item || !item.id) return;
+    const existing = map.get(item.id);
+    if(!existing || tsOf(item) >= tsOf(existing)) map.set(item.id, item);
+  });
+  return [...map.values()];
+}
+function mergeSessionsById(a, b){
+  const map = new Map();
+  [...(a||[]), ...(b||[])].forEach(item=>{ if(item && item.id) map.set(item.id, item); });
+  return [...map.values()];
+}
+function mergeStates(local, cloud){
+  if(!cloud) return local;
+  if(!local) return cloud;
+  const cloudNewer = (Date.parse(cloud.lastActivityAt||0)||0) >= (Date.parse(local.lastActivityAt||0)||0);
+  const scalarSource = cloudNewer ? cloud : local;
+  const base = merge(defaults(), cloud);
+
+  base.myRecipes = mergeArrayById(cloud.myRecipes, local.myRecipes);
+  base.myEquipment = mergeArrayById(cloud.myEquipment, local.myEquipment);
+  base.favourites = [...new Set([...(cloud.favourites||[]), ...(local.favourites||[])])];
+  base.hidden = [...new Set([...(cloud.hidden||[]), ...(local.hidden||[])])];
+  base.overrides = Object.assign({}, cloud.overrides||{}, local.overrides||{});
+  base.ratings = Object.assign({}, cloud.ratings||{}, local.ratings||{});
+
+  const pantryKeys = new Set([...Object.keys(cloud.pantry||{}), ...Object.keys(local.pantry||{})]);
+  base.pantry = {};
+  pantryKeys.forEach(k=>{ base.pantry[k] = Object.assign({}, (cloud.pantry||{})[k]||{}, (local.pantry||{})[k]||{}); });
+
+  const sessKeys = new Set([...Object.keys(cloud.brewSessions||{}), ...Object.keys(local.brewSessions||{})]);
+  base.brewSessions = {};
+  sessKeys.forEach(k=>{ base.brewSessions[k] = mergeSessionsById((cloud.brewSessions||{})[k], (local.brewSessions||{})[k]); });
+
+  ["selectedId","batchSize","equipmentId","sourceWater","grainTempC","spargeTempC","efficiency","fermLog"].forEach(k=>{
+    if(scalarSource[k] !== undefined) base[k] = scalarSource[k];
+  });
+  base.lastActivityAt = new Date().toISOString();
+  return base;
+}
+async function fetchCloudRow(){
+  const { data, error } = await sb.from("user_app_state").select("state").eq("user_id", USER.id).maybeSingle();
+  if(error) throw error;
+  return data ? data.state : null;
+}
+async function writeCloudRow(state){
+  const { error } = await sb.from("user_app_state").upsert(
+    { user_id: USER.id, state, updated_at: new Date().toISOString() },
+    { onConflict: "user_id" }
+  );
+  if(error) throw error;
+}
+async function safeSyncNow(){
+  if(!sb || !USER) return;
+  syncStatus = "syncing"; updateSyncBadge();
+  try{
+    const cloud = await fetchCloudRow();
+    const localHad = (STATE.myRecipes||[]).length;
+    const cloudHad = cloud ? (cloud.myRecipes||[]).length : 0;
+    if(!cloud){
+      await writeCloudRow(STATE);
+      LAST_SYNC_MESSAGE = `${localHad} local recipe(s) uploaded to BrewGenge Cloud.`;
+    } else {
+      STATE = mergeStates(STATE, cloud);
+      repairWaterlessCustomRecipes(STATE);
+      localStorage.setItem(STORE, JSON.stringify(STATE));
+      await writeCloudRow(STATE);
+      const mergedHad = (STATE.myRecipes||[]).length;
+      if(localHad===0 && cloudHad>0) LAST_SYNC_MESSAGE = `${cloudHad} recipe(s) restored from BrewGenge Cloud.`;
+      else if(localHad>0 && cloudHad===0) LAST_SYNC_MESSAGE = `${localHad} local recipe(s) uploaded to BrewGenge Cloud.`;
+      else LAST_SYNC_MESSAGE = `Libraries merged safely, ${mergedHad} BrewGenge recipe(s) available.`;
+    }
+    syncStatus = "synced";
+  }catch(e){
+    console.warn("safeSyncNow failed", e);
+    syncStatus = "error";
+    LAST_SYNC_MESSAGE = "Sync failed: " + (e.message||e);
+  }
+  updateSyncBadge();
+}
+function cloudPush(force){
+  if(!sb || !USER) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(()=>{ safeSyncNow(); }, force?0:900);
+}
+async function cloudPull(){
+  await safeSyncNow();
+  render();
+}
+function updateSyncBadge(){
+  const el=$("#sync"); if(!el) return;
+  const map={ local:["","Local mode"], syncing:["online","Syncing..."], synced:["online","Synced · "+(USER?USER.email:"")], error:["error","Sync error"] };
+  const [cls,txt]=USER?(map[syncStatus]||map.synced):map.local;
+  el.className=cls; el.textContent=txt;
+  const b=$("#syncStatusBadge"); if(b){ b.className=USER?"badge-ok":""; b.textContent=USER?("Signed in as "+USER.email):"Not signed in"; }
+}
+
+/* ============================================================
+   LOGIN GATE (cover page shown until signed in or "continue offline")
+   ============================================================ */
+function shouldShowGate(){
+  if(USER) return false;
+  if(localStorage.getItem(OFFLINE_MODE_KEY) === "1") return false;
+  return true;
+}
+function renderGate(){
+  if(!shouldShowGate()){ removeGate(); return; }
+  if(document.getElementById("bgGate")) return;
+  const stay = localStorage.getItem(STAY_SIGNED_IN_KEY) !== "0";
+  const gate = document.createElement("div");
+  gate.id = "bgGate";
+  gate.className = "bg-gate";
+  gate.innerHTML = `
+    <div class="bg-gate-card">
+      <div class="bg-gate-logo">${BREWGENGE_LOGO_SVG}</div>
+      <h1>BrewGenge</h1>
+      <p>Your brewing library, safely synced across every device.</p>
+      <label>Email</label>
+      <input id="bgGateEmail" type="email" placeholder="you@example.com" autocomplete="email">
+      <label class="bg-gate-check"><input type="checkbox" id="bgGateStay" ${stay?"checked":""}> Stay signed in on this device</label>
+      <button class="btn big" id="bgGateSend" style="width:100%;">Send secure sign-in link</button>
+      <button class="btn alt" id="bgGateOffline" style="width:100%;margin-top:8px;">Continue offline</button>
+      <div id="bgGateMsg" class="bg-gate-msg"></div>
+    </div>`;
+  document.body.appendChild(gate);
+  $("#bgGateEmail").addEventListener("keydown", e=>{ if(e.key==="Enter") doGateSend(); });
+  $("#bgGateStay").onchange = e=> localStorage.setItem(STAY_SIGNED_IN_KEY, e.target.checked?"1":"0");
+  $("#bgGateSend").onclick = doGateSend;
+  $("#bgGateOffline").onclick = ()=>{ localStorage.setItem(OFFLINE_MODE_KEY, "1"); removeGate(); };
+}
+function removeGate(){ const g = document.getElementById("bgGate"); if(g) g.remove(); }
+function doGateSend(){
+  attemptSendMagicLink($("#bgGateEmail").value, $("#bgGateMsg"), $("#bgGateSend"));
+}
+
+/* ============================================================
+   Supabase cloud sync (optional, graceful, hardened auth flow)
+   ------------------------------------------------------------
+   The SDK is loaded dynamically so a slow/blocked/paused Supabase
+   project can never hang the rest of the app: every tab renders
+   immediately regardless, and Account & Sync / the login gate just
+   show a clear error if the connection never comes good.
+   ============================================================ */
+function loadSupabaseScript(timeoutMs=6000){
+  return new Promise((resolve)=>{
+    if(typeof window.supabase !== "undefined"){ resolve(true); return; }
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+    let done = false;
+    const finish = (ok)=>{ if(done) return; done=true; resolve(ok); };
+    s.onload = ()=> finish(true);
+    s.onerror = ()=> finish(false);
+    document.head.appendChild(s);
+    setTimeout(()=> finish(typeof window.supabase !== "undefined"), timeoutMs);
+  });
+}
 async function initSupabase(){
   try{
-    if(typeof window.supabase === "undefined"){
-      AUTH_INIT_ERROR = "The Supabase library did not load from the CDN.";
-      updateSyncBadge();
+    const loaded = await loadSupabaseScript();
+    if(!loaded || typeof window.supabase === "undefined"){
+      AUTH_INIT_ERROR = "The Supabase library did not load from the CDN (offline, blocked, or timed out).";
+      updateSyncBadge(); renderGate();
       return;
     }
     if(!SB_URL || SB_URL.includes("YOUR-")){
       AUTH_INIT_ERROR = "Supabase URL is not configured.";
-      updateSyncBadge();
+      updateSyncBadge(); renderGate();
       return;
     }
     sb = window.supabase.createClient(SB_URL, SB_KEY);
@@ -1346,18 +1521,21 @@ async function initSupabase(){
     }
 
     const { data, error } = await sb.auth.getSession();
-    if(error){ console.warn("getSession error", error); }
+    if(error){ console.warn("getSession error", error); AUTH_INIT_ERROR = error.message; }
     USER = data && data.session ? data.session.user : null;
-    if(USER) await cloudPull();
+    if(USER){ localStorage.removeItem(OFFLINE_MODE_KEY); await cloudPull(); }
+    renderGate();
 
     sb.auth.onAuthStateChange(async (event, session)=>{
       USER = session ? session.user : null;
       if(event === "SIGNED_IN"){
         AUTH_CALLBACK_ERROR = null;
+        localStorage.removeItem(OFFLINE_MODE_KEY);
         history.replaceState(null, "", location.pathname + location.search);
       }
       if(USER) await cloudPull();
       updateSyncBadge();
+      renderGate();
       if(PAGE==="account") render();
     });
   }catch(e){
@@ -1365,43 +1543,20 @@ async function initSupabase(){
     console.warn("supabase init failed", e);
   }
   updateSyncBadge();
-}
-function cloudPush(force){
-  if(!sb || !USER) return;
-  clearTimeout(syncTimer);
-  syncTimer = setTimeout(async ()=>{
-    syncStatus="syncing"; updateSyncBadge();
-    try{ await sb.from("user_app_state").upsert({ user_id:USER.id, state:STATE }, { onConflict:"user_id" }); syncStatus="synced"; }
-    catch(e){ console.warn(e); syncStatus="error"; }
-    updateSyncBadge();
-  }, force?0:1000);
-}
-async function cloudPull(){
-  if(!sb || !USER) return;
-  try{
-    const { data, error } = await sb.from("user_app_state").select("state").eq("user_id",USER.id).maybeSingle();
-    if(error){ syncStatus="error"; return; }
-    if(data && data.state && Object.keys(data.state).length){
-      STATE = merge(defaults(), data.state);
-      repairWaterlessCustomRecipes(STATE);
-      localStorage.setItem(STORE, JSON.stringify(STATE));
-    } else {
-      await sb.from("user_app_state").upsert({ user_id:USER.id, state:STATE }, { onConflict:"user_id" });
-    }
-    syncStatus="synced";
-    render();
-  }catch(e){ console.warn(e); syncStatus="error"; }
-}
-function updateSyncBadge(){
-  const el=$("#sync"); if(!el) return;
-  const map={ local:["","Local mode"], syncing:["online","Syncing..."], synced:["online","Synced · "+(USER?USER.email:"")], error:["error","Sync error"] };
-  const [cls,txt]=USER?(map[syncStatus]||map.synced):map.local;
-  el.className=cls; el.textContent=txt;
-  const b=$("#syncStatusBadge"); if(b){ b.className=USER?"badge-ok":""; b.textContent=USER?("Signed in as "+USER.email):"Not signed in"; }
+  renderGate();
 }
 
+// If "stay signed in" is unchecked, sign out whenever the tab is hidden/closed,
+// so the next visit to this device requires a fresh magic link rather than
+// silently staying signed in via Supabase's own persisted session.
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState==="hidden" && sb && USER && localStorage.getItem(STAY_SIGNED_IN_KEY)==="0"){
+    sb.auth.signOut();
+  }
+});
+
 /* ============================================================
-   Logo / crest loading
+   Logo / crest loading (tries jpeg -> jpg -> png -> drawn SVG fallback)
    ============================================================ */
 function setupCrest(){
   const el = document.getElementById("crest");
