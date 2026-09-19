@@ -4,15 +4,17 @@ A static brew calculator with Supabase cloud sync. Built around the Guten 50L.
 
 ## Signing in
 
-A sign-in screen appears the moment you open BrewGenge.
+BrewGenge opens on its own **login page** — brand bar, hero panel, and a clean auth card. Nothing else loads until you're in.
 
-**First time?** Tap **Create account**, enter an email and a password (6+ characters), confirm it, and you're straight in. No email is sent, nothing to click, nothing to wait for.
+**First time?** Tap **Create account**, enter an email and a password (6+ characters), confirm it, and you're straight in. Nothing is emailed, nothing to click, nothing to wait for.
 
-**After that** just **Sign in** on any other device with the same details.
+**After that** just **Sign in** on any device with the same details.
 
-Tick **Stay signed in on this device** (on by default) and the session restores automatically every time you open BrewGenge there, with your brews syncing on their own.
+**Stay signed in on this device** is ticked by default, so the session restores automatically every time you open BrewGenge there and your brews sync on their own.
 
-There's also **Continue offline** if you'd rather not have an account at all — the whole app works, just saved in that browser only.
+**Continue without an account** is there too — the whole app works, just saved in that browser only.
+
+The same Sign in / Create account form also lives under **Account & Sync** if you'd rather switch accounts from inside the app.
 
 ### Supabase settings
 
@@ -22,7 +24,7 @@ Authentication → **Sign In / Providers** → **Email**:
 - Email provider: **enabled**
 - **"Confirm email": OFF**
 
-That second one matters. If it's left ON, Supabase emails a confirmation *link* when you create an account and you're back in link-hell. With it off, Create account signs you straight in. BrewGenge detects this case and tells you exactly which toggle to flip rather than appearing to hang.
+That second one matters. Left ON, Supabase emails a confirmation *link* on signup and you're back in link-hell. With it off, Create account signs you straight in. BrewGenge detects this case and names the exact toggle rather than appearing to hang.
 
 No SMTP. No email templates.
 
@@ -76,7 +78,7 @@ Dashboard · Recipe Library · Recipe Detail popup (image, style comparison, liv
 ## Changelog
 
 - **Share BrewGenge tab.** Name + email + your name, writes the invite, opens it in your email app ready to send. Copy invite / copy link / native share sheet as alternatives. Live preview and a synced "Shared with" history.
-- **Sign in / Create account tabs** on the login screen that appears when the page loads, with Stay signed in ticked by default. Create your own account in the app, no Supabase dashboard trip needed. Clear errors for wrong password, already-registered, signups-disabled, and the "Confirm email is still ON" case.
+- **Standalone login page.** Proper full-screen sign-in with a brand bar, hero panel and underline tabs, rather than a form buried in a settings tab. Sign in / Create account, Stay signed in ticked by default, Continue without an account. Busy states on the button, and clear errors for wrong password, already-registered, signups-disabled and the "Confirm email is still ON" case.
 - **Dark mode toggle** in the header, persisted per device, applied across every tab, table, modal and the login screen.
 - **Big BrewGenge crest** behind the login screen, plus a subtle watermark behind the app. Logo background made transparent so it works on light and dark.
 - Safe merge sync, water/salt calculator, recipe detail popup — all unchanged.

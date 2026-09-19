@@ -748,8 +748,8 @@ function account(){
   }
 }
 
-// Shared auth form, used by both the Account tab and the login gate.
-// prefix avoids duplicate element ids when both exist on the page.
+// Compact auth form used inside the Account & Sync tab (already-in-app view).
+// The full-screen login page has its own markup, see renderGate().
 function buildAuthFormHTML(stay, prefix){
   const lastEmail = localStorage.getItem(LAST_EMAIL_KEY) || "";
   const isSignup = authMode === "signup";
@@ -764,7 +764,6 @@ function buildAuthFormHTML(stay, prefix){
     <label class="toggle" style="margin:14px 0 12px; display:flex; align-items:center; gap:8px;"><input type="checkbox" id="${prefix}Stay" ${stay?"checked":""}> Stay signed in on this device</label>
     <button class="btn big" id="${prefix}Go">${isSignup?'Create account':'Login'}</button>
     <div id="${prefix}Msg" style="margin-top:10px;"></div>
-    ${isSignup?`<p class="muted" style="margin-top:12px;line-height:1.5;">Creating an account backs your brews up to the cloud so they follow you between your phone and computer. Nothing is emailed to you.</p>`:``}
   </div>`;
 }
 function wireAuthForm(prefix){
@@ -795,8 +794,9 @@ async function doAuth(prefix){
   if(!sb){ msgEl.innerHTML = `<span class="warn">Still connecting. If this persists the Supabase project may be paused.</span>`; return; }
 
   const goBtn = $("#"+prefix+"Go");
-  msgEl.innerHTML = `<span class="muted">${isSignup?'Creating your account...':'Signing in...'}</span>`;
-  if(goBtn) goBtn.disabled = true;
+  const goLabel = goBtn ? goBtn.textContent : "";
+  msgEl.innerHTML = "";
+  if(goBtn){ goBtn.disabled = true; goBtn.textContent = isSignup ? "Creating account\u2026" : "Signing in\u2026"; }
   try{
     const result = isSignup
       ? await sb.auth.signUp({ email, password: pass })
@@ -805,16 +805,15 @@ async function doAuth(prefix){
 
     if(error){
       msgEl.innerHTML = `<span class="warn">${esc(friendlyAuthError(error.message, isSignup))}</span>`;
-      if(goBtn) goBtn.disabled = false;
+      if(goBtn){ goBtn.disabled = false; goBtn.textContent = goLabel; }
       return;
     }
 
     // If "Confirm email" is still switched on in Supabase, signUp returns a user
     // but NO session, because it is waiting on an emailed confirmation link.
-    // Say so plainly rather than appearing to hang.
     if(isSignup && data && data.user && !data.session){
-      msgEl.innerHTML = `<span class="warn">Account made, but Supabase is set to require email confirmation, so it has emailed you a link. Either click that link, or (better) turn <b>OFF</b> "Confirm email" under Authentication &rarr; Sign In / Providers &rarr; Email in your Supabase dashboard, then create the account again.</span>`;
-      if(goBtn) goBtn.disabled = false;
+      msgEl.innerHTML = `<span class="warn">Account made, but Supabase is set to require email confirmation, so it has emailed you a link. Either click that link, or turn <b>OFF</b> "Confirm email" under Authentication &rarr; Sign In / Providers &rarr; Email in Supabase, then create the account again.</span>`;
+      if(goBtn){ goBtn.disabled = false; goBtn.textContent = goLabel; }
       return;
     }
 
@@ -827,7 +826,7 @@ async function doAuth(prefix){
     if(PAGE==="account") render();
   }catch(e){
     msgEl.innerHTML = `<span class="warn">Network error: ${esc(e.message)}. The Supabase project may be paused or unreachable.</span>`;
-    if(goBtn) goBtn.disabled = false;
+    if(goBtn){ goBtn.disabled = false; goBtn.textContent = goLabel; }
   }
 }
 function friendlyAuthError(msg, isSignup){
@@ -1409,21 +1408,74 @@ function shouldShowGate(){ if(USER) return false; if(localStorage.getItem(OFFLIN
 function renderGate(forceShow){
   if(!forceShow && !shouldShowGate()){ removeGate(); return; }
   if(forceShow && USER){ removeGate(); return; }
-  let gate = document.getElementById("bgGate");
   const stay = localStorage.getItem(STAY_SIGNED_IN_KEY) !== "0";
+  const lastEmail = localStorage.getItem(LAST_EMAIL_KEY) || "";
+  const isSignup = authMode === "signup";
+
+  let gate = document.getElementById("bgGate");
   if(!gate){ gate = document.createElement("div"); gate.id = "bgGate"; gate.className = "bg-gate"; document.body.appendChild(gate); }
+
   gate.innerHTML = `
-    <div class="bg-gate-bg" id="bgGateBg"></div>
-    <div class="bg-gate-card">
-      <h1>BrewGenge</h1>
-      <p>${authMode === "signup" ? "Create an account to sync your brews across every device." : "Your brewing library, synced across every device."}</p>
-      ${buildAuthFormHTML(stay, "gate")}
-      <button class="bg-gate-offline" id="bgGateOffline">Continue offline</button>
+    <div class="lp-topbar">
+      <div class="lp-topbar-crest" id="lpTopCrest"></div>
+      <span class="lp-topbar-name">BrewGenge</span>
+    </div>
+
+    <div class="lp-wrap">
+      <!-- Hero panel -->
+      <div class="lp-hero">
+        <div class="lp-hero-art" id="lpHeroArt"></div>
+        <div class="lp-hero-body">
+          <div class="lp-hero-badge" id="lpHeroBadge"></div>
+          <h1>BrewGenge</h1>
+          <p>Ultimate brew calculator, built for the Guten 50L</p>
+        </div>
+      </div>
+
+      <!-- Auth panel -->
+      <div class="lp-card">
+        <div class="lp-tabs">
+          <button class="lp-tab ${!isSignup?'on':''}" id="gateTabIn" type="button">Sign in</button>
+          <button class="lp-tab ${isSignup?'on':''}" id="gateTabUp" type="button">Create account</button>
+        </div>
+        <div class="lp-body">
+          <label class="lp-label" for="gateEmail">Email</label>
+          <input class="lp-input" id="gateEmail" type="email" placeholder="you@example.com" autocomplete="email" value="${esc(lastEmail)}">
+
+          <label class="lp-label" for="gatePass">Password</label>
+          <input class="lp-input" id="gatePass" type="password" placeholder="${isSignup?'At least 6 characters':'Your password'}" autocomplete="${isSignup?'new-password':'current-password'}">
+
+          ${isSignup ? `
+          <label class="lp-label" for="gatePass2">Confirm password</label>
+          <input class="lp-input" id="gatePass2" type="password" placeholder="Type it again" autocomplete="new-password">` : ``}
+
+          <label class="lp-check"><input type="checkbox" id="gateStay" ${stay?"checked":""}> Stay signed in on this device</label>
+
+          <button class="lp-btn" id="gateGo" type="button">${isSignup?'Create account':'Sign in'}</button>
+
+          <div id="gateMsg" class="lp-msg"></div>
+
+          <button class="lp-offline" id="bgGateOffline" type="button">Continue without an account</button>
+        </div>
+      </div>
+
+      <p class="lp-foot">Your recipes, gear and brew history, synced across every device.</p>
     </div>`;
-  const bgEl = document.getElementById("bgGateBg");
-  if(bgEl) loadLogoInto(bgEl);
+
+  const art = document.getElementById("lpHeroArt"); if(art) loadLogoInto(art);
+  const badge = document.getElementById("lpHeroBadge"); if(badge) loadLogoInto(badge);
+  const topCrest = document.getElementById("lpTopCrest"); if(topCrest) loadLogoInto(topCrest);
+
   wireAuthForm("gate");
-  const offlineBtn = $("#bgGateOffline"); if(offlineBtn) offlineBtn.onclick = ()=>{ localStorage.setItem(OFFLINE_MODE_KEY, "1"); removeGate(); };
+  const offlineBtn = $("#bgGateOffline");
+  if(offlineBtn) offlineBtn.onclick = ()=>{ localStorage.setItem(OFFLINE_MODE_KEY, "1"); removeGate(); };
+
+  // Focus whichever field still needs filling in.
+  setTimeout(()=>{
+    const em = document.getElementById("gateEmail");
+    const pw = document.getElementById("gatePass");
+    if(em && !em.value) em.focus(); else if(pw) pw.focus();
+  }, 50);
 }
 function removeGate(){ const g = document.getElementById("bgGate"); if(g) g.remove(); }
 
